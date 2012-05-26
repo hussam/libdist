@@ -1,0 +1,1 @@
+-record(conf, {protocol, core_module, version = 0, pids = []}).
