@@ -10,16 +10,8 @@
 -include("repobj.hrl").
 
 % Create a new replicated object
-new(CoreSettings = {Module, _Args}, {RepProtocol, RepArgs, Nodes}, Retry) ->
-   % spawn new replicas
-   Replicas = [
-      spawn(N, RepProtocol, new_replica, [CoreSettings, RepArgs]) ||
-      N <- Nodes
-   ],
-   % create a configuration and inform all the replicas of it
-   Conf0 = #conf{protocol = RepProtocol, core_module = Module, version = 0},
-   RepProtocol:reconfigure(Conf0, Replicas, Retry).     % returns the new config
-
+new(CoreSettings, {RepProtocol, RepArgs, Nodes}, Retry) ->
+   RepProtocol:new(CoreSettings, RepArgs, Nodes, Retry).
 
 % Execute a command synchronously on a replicated object
 do(Obj = #conf{protocol = Module}, Command, Retry) ->

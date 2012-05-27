@@ -1,5 +1,6 @@
 -module(primary_backup).
 -export([
+      new/4,
       new_replica/2,
       do/3,
       fork/4,
@@ -20,6 +21,20 @@
       next_cmd_num = 0
    }).
 
+% Create a new primary/backup replicated state machine
+new(CoreSettings = {Module, _}, PBArgs, Nodes, Retry) ->
+   % spawn new replicas
+   Replicas = [
+      spawn(N, ?MODULE, new_replica, [CoreSettings, PBArgs]) || N <- Nodes ],
+   % create a configuration and inform all the replicas of it
+   ConfArg = case proplists:lookup(read_src, PBArgs) of
+      {_, backup} -> random:seed(now()), {read_from_backup, Module};
+      {_, random} -> random:seed(now()), {read_from_random, Module};
+      _ -> read_from_primary
+   end,
+   Conf0 = #conf{protocol = ?MODULE, args = ConfArg, version = 0},
+   reconfigure(Conf0, Replicas, Retry).   % returns the new configuration
+
 
 % Start a new replica
 new_replica({CoreModule, CoreArgs}, _RepArgs) ->
@@ -31,8 +46,28 @@ new_replica({CoreModule, CoreArgs}, _RepArgs) ->
    loop(State).
 
 % Send a command to a replicated object
-do(_Obj=#conf{pids=[Primary | _]}, Command, Retry) ->
-   repobj_utils:call(Primary, command, Command, Retry).
+do(#conf{pids=Replicas=[Primary | Backups], args = PBArgs}, Command, Retry) ->
+   Target = case PBArgs of
+      % non-mutating commands go to a random backup
+      {read_from_backup, Module} when backups /= [] ->
+         case Module:is_mutating(Command) of
+            true -> Primary;
+            false -> lists:nth( random:uniform(length(Backups)) , Backups )
+         end;
+
+      % non-mutating commands go to a random replica
+      {read_from_random, Module} ->
+         case Module:is_mutating(Command) of
+            true -> Primary;
+            false -> lists:nth( random:uniform(length(Replicas)) , Replicas )
+         end;
+
+      % either a mutating command, or all commands go to primary
+      _ ->
+         Primary
+   end,
+   repobj_utils:call(Target, command, Command, Retry).
+
 
 % Fork one of the replicas in this replicated object
 fork(Obj, N, Node, Args) ->
@@ -96,6 +131,11 @@ loop(State = #state{
          Primary ! {stabilized, StableCount},
          NewCount = StableCount + 1,
          loop(State#state{stable_count = NewCount, next_cmd_num = NewCount});
+
+      % Handle query command as a backup replica
+      {Ref, Client, command, Command} ->
+         Client ! {Ref, Core:do(Command)},
+         loop(State);
 
       {stabilized, StableCount} ->
          NewStableCount = case ets:update_counter(Unstable, StableCount, -1) of

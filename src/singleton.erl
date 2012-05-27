@@ -1,5 +1,6 @@
 -module(singleton).
 -export([
+      new/4,
       new_replica/2,
       do/3,
       fork/4,
@@ -9,9 +10,13 @@
 
 -include("repobj.hrl").
 
+new(CoreSettings, _Args, [Node], _Retry) ->
+   Replica = [ spawn(Node, ?MODULE, new_replica, [CoreSettings, _Args]) ],
+   #conf{protocol = ?MODULE, version = 1, pids = Replica}.  % return config
+
 new_replica({CoreModule, CoreArgs}, _RepArgs) ->
    Core = core:new(CoreModule, CoreArgs),
-   Conf = #conf{protocol = ?MODULE},
+   Conf = #conf{protocol = ?MODULE, version = 1, pids = [self()]},
    loop(Core, Conf).
 
 do(_Obj=#conf{pids=[Pid]}, Command, Retry) ->

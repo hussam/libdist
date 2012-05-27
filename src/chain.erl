@@ -1,5 +1,6 @@
 -module(chain).
 -export([
+      new/4,
       new_replica/2,
       do/3,
       fork/4,
@@ -20,6 +21,14 @@
       next_cmd_num = 0
    }).
 
+% Create a new chain replicated state machine
+new(CoreSettings = {Module, _}, ChainArgs, Nodes, Retry) ->
+   % spawn new replicas
+   Replicas = [
+      spawn(N, ?MODULE, new_replica, [CoreSettings, ChainArgs]) || N <- Nodes ],
+   % create a configuration and inform all the replicas of it
+   Conf0 = #conf{protocol = ?MODULE, args = Module, version = 0},
+   reconfigure(Conf0, Replicas, Retry).   % returns the new configuration
 
 % Start a new replica
 new_replica({CoreModule, CoreArgs}, _RepArgs) ->
@@ -31,8 +40,8 @@ new_replica({CoreModule, CoreArgs}, _RepArgs) ->
    loop(State).
 
 % Send a command to a replicated object
-do(_Obj=#conf{pids = Pids = [Head | _], core_module = Core}, Command, Retry) ->
-   Target = case Core:is_mutating(Command) of
+do(_Obj=#conf{pids = Pids = [Head | _], args = CoreModule}, Command, Retry) ->
+   Target = case CoreModule:is_mutating(Command) of
       true -> Head;
       false -> lists:last(Pids)
    end,
