@@ -4,7 +4,7 @@
       new_replica/2,
       do/3,
       fork/4,
-      reconfigure/3,
+      reconfigure/4,
       stop/4
    ]).
 
@@ -28,7 +28,7 @@ new(CoreSettings = {Module, _}, ChainArgs, Nodes, Retry) ->
       spawn(N, ?MODULE, new_replica, [CoreSettings, ChainArgs]) || N <- Nodes ],
    % create a configuration and inform all the replicas of it
    Conf0 = #conf{protocol = ?MODULE, args = Module, version = 0},
-   reconfigure(Conf0, Replicas, Retry).   % returns the new configuration
+   reconfigure(Conf0, Replicas, [], Retry).   % returns the new configuration
 
 % Start a new replica
 new_replica({CoreModule, CoreArgs}, _RepArgs) ->
@@ -53,8 +53,9 @@ fork(Obj, N, Node, Args) ->
    repobj_utils:cast(Pid, fork, {Node, Args}).
 
 % Reconfigure the replicated object with a new set of replicas
-reconfigure(Obj=#conf{version = Vn, pids = OldReplicas}, NewReplicas, Retry) ->
-   NewConf = Obj#conf{ version = Vn + 1, pids = NewReplicas },
+reconfigure(OldConf, NewReplicas, _NewArgs, Retry) ->
+   #conf{version = Vn, pids = OldReplicas} = OldConf,
+   NewConf = OldConf#conf{ version = Vn + 1, pids = NewReplicas },
    % This takes out the replicas in the old configuration but not in the new one
    repobj_utils:multicall(OldReplicas, reconfigure, NewConf, Retry),
    % This integrates the replicas in the new configuration that are not old

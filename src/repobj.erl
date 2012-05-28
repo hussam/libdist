@@ -3,7 +3,7 @@
       new/3,
       do/3,
       fork/4,
-      reconfigure/3,
+      reconfigure/4,
       stop/4
    ]).
 
@@ -17,8 +17,8 @@ new(CoreSettings, {RepProtocol, RepArgs, Nodes}, Retry) ->
 do(Obj = #conf{protocol = Module}, Command, Retry) ->
    Module:do(Obj, Command, Retry).
 
-reconfigure(Obj = #conf{protocol = Module}, NewReplicas, Retry) ->
-   Module:reconfigure(Obj, NewReplicas, Retry).
+reconfigure(Obj = #conf{protocol = Module}, NewReplicas, NewArgs, Retry) ->
+   Module:reconfigure(Obj, NewReplicas, NewArgs, Retry).
 
 fork(Obj = #conf{protocol = Module}, N, Node, Args) ->
    Module:fork(Obj, N, Node, Args).

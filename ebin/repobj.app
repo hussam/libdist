@@ -8,7 +8,8 @@
          core,
          singleton,
          chain,
-         primary_backup
+         primary_backup,
+         quorum
          ]},
       {registered, []},
       {applications, [kernel, stdlib]}

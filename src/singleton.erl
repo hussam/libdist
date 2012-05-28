@@ -4,7 +4,7 @@
       new_replica/2,
       do/3,
       fork/4,
-      reconfigure/3,
+      reconfigure/4,
       stop/4
    ]).
 
@@ -26,8 +26,9 @@ fork(Obj, N, Node, Args) ->
    Pid = lists:nth(N, Obj#conf.pids),
    repobj_utils:cast(Pid, fork, {Node, Args}).
 
-reconfigure(Obj=#conf{version = Vn, pids = [OldReplica]}, NewReplica, Retry) ->
-   NewConf = Obj#conf{version = Vn + 1, pids = [NewReplica]},
+reconfigure(OldConf, NewReplica, _NewArgs, Retry) ->
+   #conf{version = Vn, pids = [OldReplica]} = OldConf,
+   NewConf = OldConf#conf{version = Vn + 1, pids = [NewReplica]},
    repobj_utils:call(OldReplica, reconfigure, NewConf, Retry),
    if
       NewReplica == OldReplica -> do_nothing;

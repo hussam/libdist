@@ -4,7 +4,7 @@
       new_replica/2,
       do/3,
       fork/4,
-      reconfigure/3,
+      reconfigure/4,
       stop/4
    ]).
 
@@ -27,13 +27,8 @@ new(CoreSettings = {Module, _}, PBArgs, Nodes, Retry) ->
    Replicas = [
       spawn(N, ?MODULE, new_replica, [CoreSettings, PBArgs]) || N <- Nodes ],
    % create a configuration and inform all the replicas of it
-   ConfArg = case proplists:lookup(read_src, PBArgs) of
-      {_, backup} -> random:seed(now()), {read_from_backup, Module};
-      {_, random} -> random:seed(now()), {read_from_random, Module};
-      _ -> read_from_primary
-   end,
-   Conf0 = #conf{protocol = ?MODULE, args = ConfArg, version = 0},
-   reconfigure(Conf0, Replicas, Retry).   % returns the new configuration
+   Conf0 = #conf{protocol = ?MODULE, args = {Module, PBArgs}, version = 0},
+   reconfigure(Conf0, Replicas, [], Retry).   % returns the new configuration
 
 
 % Start a new replica
@@ -46,18 +41,18 @@ new_replica({CoreModule, CoreArgs}, _RepArgs) ->
    loop(State).
 
 % Send a command to a replicated object
-do(#conf{pids=Replicas=[Primary | Backups], args = PBArgs}, Command, Retry) ->
-   Target = case PBArgs of
+do(#conf{pids=Replicas=[Primary | Backups], args={C, Args}}, Command, Retry) ->
+   Target = case proplists:lookup(read_src, Args) of
       % non-mutating commands go to a random backup
-      {read_from_backup, Module} when backups /= [] ->
-         case Module:is_mutating(Command) of
+      {_, backup} when Backups /= [] ->
+         case C:is_mutating(Command) of
             true -> Primary;
             false -> lists:nth( random:uniform(length(Backups)) , Backups )
          end;
 
       % non-mutating commands go to a random replica
-      {read_from_random, Module} ->
-         case Module:is_mutating(Command) of
+      {_, random} ->
+         case C:is_mutating(Command) of
             true -> Primary;
             false -> lists:nth( random:uniform(length(Replicas)) , Replicas )
          end;
@@ -75,8 +70,13 @@ fork(Obj, N, Node, Args) ->
    repobj_utils:cast(Pid, fork, {Node, Args}).
 
 % Reconfigure the replicated object with a new set of replicas
-reconfigure(Obj=#conf{version = Vn, pids = OldReplicas}, NewReplicas, Retry) ->
-   NewConf = Obj#conf{ version = Vn + 1, pids = NewReplicas },
+reconfigure(OldConf, NewReplicas, NewArgs, Retry) ->
+   #conf{version = Vn, pids = OldReplicas, args = {Module, _}} = OldConf,
+   NewConf = OldConf#conf{
+      version = Vn + 1,
+      pids = NewReplicas,
+      args = {Module, NewArgs}
+   },
    % This takes out the replicas in the old configuration but not in the new one
    repobj_utils:multicall(OldReplicas, reconfigure, NewConf, Retry),
    % This integrates the replicas in the new configuration that are not old
