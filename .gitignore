@@ -3,3 +3,4 @@ deps
 .*.swp
 *.orig
 *~
+.DS_Store
