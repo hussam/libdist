@@ -9,7 +9,10 @@
          singleton,
          chain,
          primary_backup,
-         quorum
+         quorum,
+         elastic,
+         elastic_chain,
+         elastic_primary_backup
          ]},
       {registered, []},
       {applications, [kernel, stdlib]}
