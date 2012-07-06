@@ -16,7 +16,7 @@ do(Command) ->
    Module:do(Instance, Command).
 
 fork(Node, Args) ->
-   Module:fork(Instance, Node, Args).
+   instance(Module, Module:fork(Instance, Node, Args)).
 
 is_mutating(Command) ->
    Module:is_mutating(Command).
