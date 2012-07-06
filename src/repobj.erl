@@ -1,10 +1,20 @@
 -module(repobj).
+
+% Interface for manipulating a replicated object
 -export([
       new/3,
       do/3,
       fork/4,
       reconfigure/4,
       stop/4
+   ]).
+
+% Interface for examining a configuration
+-export([
+      version/1,
+      pids/1,
+      protocol/1,
+      args/1
    ]).
 
 -include("repobj.hrl").
@@ -25,5 +35,21 @@ fork(Obj = #conf{protocol = Module}, N, Node, Args) ->
 
 stop(Obj = #conf{protocol = Module}, N, Reason, Retry) ->
    Module:stop(Obj, N, Reason, Retry).
+
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Interface for examining a repobj configuration %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+% XXX: Is it cleaner if these were in a separate module?
+
+version(#conf{version = Vn}) -> Vn.
+
+pids(#conf{pids = Pids}) -> Pids.
+
+protocol(#conf{protocol = Protocol}) -> Protocol.
+
+args(#conf{args = Args}) -> Args.
 
 
