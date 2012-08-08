@@ -40,7 +40,7 @@ new(CoreSettings = {Module, _}, QArgs, Nodes, Retry) ->
 % Start a new replica
 new_replica({CoreModule, CoreArgs}, _RepArgs) ->
    State = #state{
-      core = core:new(CoreModule, CoreArgs),
+      core = sm:new(CoreModule, CoreArgs),
       conf = #conf{protocol = ?MODULE}
    },
    random:seed(now()),

@@ -15,7 +15,7 @@ new(CoreSettings, _Args, [Node], _Retry) ->
    #conf{protocol = ?MODULE, version = 1, pids = Replica}.  % return config
 
 new_replica({CoreModule, CoreArgs}, _RepArgs) ->
-   Core = core:new(CoreModule, CoreArgs),
+   Core = sm:new(CoreModule, CoreArgs),
    Conf = #conf{protocol = ?MODULE, version = 1, pids = [self()]},
    loop(Core, Conf).
 

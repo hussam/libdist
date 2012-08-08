@@ -5,7 +5,6 @@
       {modules, [
          repobj,
          repobj_utils,
-         core,
          singleton,
          chain,
          primary_backup,

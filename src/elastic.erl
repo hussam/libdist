@@ -188,7 +188,7 @@ pendingLoop(CoreModule, CoreArgs) ->
       {Ref, Client, activate, Conf=#conf{version=1, pids=Pids, args=ElasticModule}} ->
          case lists:member(self(), Pids) of
             true ->
-               Core = core:new(CoreModule, CoreArgs),
+               Core = sm:new(CoreModule, CoreArgs),
                Unstable = ets:new(unstable_commands, []),
                Client ! {Ref, ok},
                ElasticModule:activeLoop(Core, Conf, Unstable, 0, 0);
