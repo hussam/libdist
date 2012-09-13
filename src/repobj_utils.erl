@@ -36,8 +36,8 @@ cast(Pid, Tag, Request) ->
 multicast(Pids, Tag, Request) ->
    Ref = make_ref(),
    Self = self(),
-   % TODO: perhaps spawn separate processes to send in parallel
-   [ Pid ! {Ref, Self, Tag, Request} || Pid <- Pids ],
+   % spawn separate processes to send in parallel
+   [ spawn(fun() -> Pid ! {Ref, Self, Tag, Request} end) || Pid <- Pids ],
    Ref.
 
 
