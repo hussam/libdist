@@ -15,7 +15,6 @@
       conf,
       previous,
       next,
-      last,
       unstable,
       stable_count = 0,
       next_cmd_num = 0
@@ -81,23 +80,16 @@ loop(State = #state{
       conf = Conf,
       previous = Prev,
       next = Next,
-      last = Last,
       unstable = Unstable,
       stable_count = StableCount,
       next_cmd_num = NextCmdNum
    }) ->
    receive
       % Handle command as the HEAD of the chain
-      {Ref, Client, command, Command} = Msg when Prev == chain_head ->
-         case Core:is_mutating(Command) of
-            true ->
-               ets:insert(Unstable, {NextCmdNum, Ref, Client, Command}),
-               Next ! {Ref, Client, command, NextCmdNum, Command},
-               loop(State#state{next_cmd_num = NextCmdNum + 1});
-            false ->
-               Last ! Msg,
-               loop(State)
-         end;
+      {Ref, Client, command, Command} when Prev == chain_head ->
+         ets:insert(Unstable, {NextCmdNum, Ref, Client, Command}),
+         Next ! {Ref, Client, command, NextCmdNum, Command},
+         loop(State#state{next_cmd_num = NextCmdNum + 1});
 
       % Handle command as any replica in the MIDDLE of the chain
       {Ref, Client, command, NextCmdNum, Cmd} = Msg when Next /= chain_tail ->
@@ -141,8 +133,7 @@ loop(State = #state{
             core = Core:fork(ForkNode, ForkArgs),
             conf = undefined_after_fork,
             previous = undefined_after_fork,
-            next = undefined_after_fork,
-            last = undefined_after_fork
+            next = undefined_after_fork
          },
          UnstableList = ets:tab2list(Unstable),
          ForkedPid = spawn(ForkNode, fun() ->
@@ -163,8 +154,7 @@ loop(State = #state{
                loop(State#state{
                      conf = NewConf,
                      previous = NewPrev,
-                     next = NewNext,
-                     last = lists:last(NewReplicas)
+                     next = NewNext
                   });
             false ->
                Core:stop(reconfigure)
