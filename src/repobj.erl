@@ -44,12 +44,16 @@ stop(Obj = #conf{protocol = Module}, N, Reason, Retry) ->
 
 % XXX: Is it cleaner if these were in a separate module?
 
-version(#conf{version = Vn}) -> Vn.
+version(#conf{version = Vn}) -> Vn;
+version(_) -> not_a_repobj.
 
-pids(#conf{pids = Pids}) -> Pids.
+pids(#conf{pids = Pids}) -> Pids;
+pids(_) -> not_a_repobj.
 
-protocol(#conf{protocol = Protocol}) -> Protocol.
+protocol(#conf{protocol = Protocol}) -> Protocol;
+protocol(_) -> not_a_repobj.
 
-args(#conf{args = Args}) -> Args.
+args(#conf{args = Args}) -> Args;
+args(_) -> not_a_repobj.
 
 
