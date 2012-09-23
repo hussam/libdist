@@ -43,7 +43,6 @@ new_replica({CoreModule, CoreArgs}, _RepArgs) ->
       core = sm:new(CoreModule, CoreArgs),
       conf = #conf{protocol = ?MODULE}
    },
-   random:seed(now()),
    loop(State).
 
 % Send a command to a replicated object
