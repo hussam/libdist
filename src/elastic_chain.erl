@@ -42,20 +42,28 @@ activeLoop(State = #state{
             next_cmd_num = NextCmdNum
    }) ->
    receive
+      {_, _, read, {Vn, _}} = Msg when Next /= chain_tail ->
+         Next ! Msg,
+         activeLoop(State);
+
+      {Ref, Client, read, {Vn, Command}} ->  % Next == chain_tail
+         Client ! {Ref, Core:do(Command)},
+         activeLoop(State);
+
       % Transition: add a command to stable history
-      {Ref, Client, command, {Vn, Command}} when Prev == chain_head ->
+      {Ref, Client, write, {Vn, Command}} when Prev == chain_head ->
          ets:insert(Unstable, {NextCmdNum, Ref, Client, Command}),
-         Next ! {Ref, Client, Vn, command, NextCmdNum, Command},
+         Next ! {Ref, Client, Vn, write, NextCmdNum, Command},
          activeLoop(State#state{next_cmd_num = NextCmdNum + 1});
 
       % XXX: we either trust clients to send commands to the head of the chain,
       % or we have to use some sort of message authentication mechanisms
-      {Ref, Client, Vn, command, NextCmdNum, Command} = Msg when Next /= chain_tail ->
+      {Ref, Client, Vn, write, NextCmdNum, Command} = Msg when Next /= chain_tail ->
          Next ! Msg,    % Forward first as this shouldn't break semantics.
          ets:insert(Unstable, {NextCmdNum, Ref, Client, Command}),
          activeLoop(State#state{next_cmd_num = NextCmdNum + 1});
 
-      {Ref, Client, Vn, command, NextCmdNum, Command} ->    % Next == chain_tail
+      {Ref, Client, Vn, write, NextCmdNum, Command} ->    % Next == chain_tail
          Client ! {Ref, Core:do(Command)},
          Prev ! {Vn, stabilized, NextCmdNum},
          activeLoop(State#state{stable_count=StableCount+1, next_cmd_num=NextCmdNum+1});
@@ -72,7 +80,6 @@ activeLoop(State = #state{
          Core:do(Command),
          ets:delete(Unstable, StableCount),
          activeLoop(State#state{stable_count = StableCount + 1});
-
 
       % Transition: wedgeState
       % take replica into immutable state

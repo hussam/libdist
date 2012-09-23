@@ -53,16 +53,23 @@ activeLoop(State = #state{
             next_cmd_num = NextCmdNum
    }) ->
    receive
+      {Ref, Client, read, {Vn, Command}} when Role == primary ->
+         Client ! {Ref, Core:do(Command)},
+         activeLoop(State);
+
+      {_, _, read, _} ->
+         activeLoop(State);
+
       % Transition: add a command to stable history
-      {Ref, Client, command, {Vn, Command}} when Role == primary ->
+      {Ref, Client, write, {Vn, Command}} when Role == primary ->
          ets:insert(Unstable, {NextCmdNum, NumBackups, Ref, Client, Command}),
-         Msg = {Self, Vn, command, NextCmdNum, Command},
+         Msg = {Self, Vn, write, NextCmdNum, Command},
          [ B ! Msg || B <- Backups],
          activeLoop(State#state{next_cmd_num = NextCmdNum + 1});
 
-      {Primary, Vn, command, NextCmdNum, Command} ->
-         Core:do(Command),
+      {Primary, Vn, write, NextCmdNum, Command} ->
          Primary ! {Vn, stabilized, NextCmdNum},
+         Core:do(Command),
          activeLoop(State#state{stable_count=StableCount+1, next_cmd_num=NextCmdNum+1});
 
       {Vn, stabilized, StableCount} ->

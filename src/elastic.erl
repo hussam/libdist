@@ -25,25 +25,33 @@
 -include("repobj.hrl").
 
 % Create a new elastically replicated state machine
-new(CoreSettings, ElasticArgs, Nodes, Retry) ->
+new(CoreSettings = {CoreModule, _}, ElasticArgs, Nodes, Retry) ->
    % spawn new replicas
    Replicas = [
       spawn(N, ?MODULE, new_replica, [CoreSettings, ElasticArgs]) || N <- Nodes],
 
-   Conf = set_conf_args(ElasticArgs, #conf{
-      protocol = ?MODULE,
-      version = 1,
-      pids = Replicas
-   }),
-   activate(Conf, Retry).  % activate and return the new configuration
+   Conf = set_conf_args([{core_module, CoreModule} | ElasticArgs], #conf{
+         protocol = ?MODULE,
+         version = 1,
+         pids = Replicas
+      }),
+
+   % activate and return the new configuration
+   repobj_utils:multicall(Replicas, activate, Conf, Retry),
+   Conf.
 
 % Start a new replica
 new_replica({CoreModule, CoreArgs}, _ElasticArgs) ->
    pendingLoop(CoreModule, CoreArgs).
 
 % Send a command to a replicated object
-do(_Obj=#conf{pids = [Orderer | _], version = Vn}, Command, Retry) ->
-   repobj_utils:call(Orderer, command, {Vn, Command}, Retry).
+do(#conf{pids=[Orderer | _], version=Vn, args=Args}, Command, Retry) ->
+   CoreModule = proplists:get_value(cmod, Args),
+   CommandType = case CoreModule:is_mutating(Command) of
+      false -> read;
+      true -> write
+   end,
+   repobj_utils:call(Orderer, CommandType, {Vn, Command}, Retry).
 
 % Fork one of the replicas in this replicated object
 fork(_Obj=#conf{pids = Pids, version = Vn}, N, Node, Args) ->
@@ -52,8 +60,9 @@ fork(_Obj=#conf{pids = Pids, version = Vn}, N, Node, Args) ->
 
 % Reconfigure the replicated object with a new set of replicas
 reconfigure(OldConf, NewReplicas, NewArgs, Retry) ->
-   #conf{version = Vn, pids = OldReplicas} = OldConf,
-   NewConf = set_conf_args(NewArgs, OldConf#conf{version=Vn+1, pids=NewReplicas}),
+   #conf{version = Vn, pids = OldReplicas, args = OldArgs} = OldConf,
+   NewConfArgs = [{core_module, proplists:get_value(cmod, OldArgs)} | NewArgs],
+   NewConf = set_conf_args(NewConfArgs, OldConf#conf{version=Vn+1, pids=NewReplicas}),
 
    % wedge the old configuration by wedging any of its replicas
    repobj_utils:anycall(OldReplicas, wedge, Vn, Retry),
@@ -104,6 +113,7 @@ wedge(#conf{version = Vn, pids = Pids}, N, Retry) ->
    Pid = lists:nth(N, Pids),
    repobj_utils:call(Pid, wedge, Vn, Retry).
 
+
 %%%%%%%%%%%%%%%%%%%%%%
 % Protocol Callbacks %
 %%%%%%%%%%%%%%%%%%%%%%
@@ -118,11 +128,12 @@ immutableLoop(Core, Conf=#conf{version=Vn}, Unstable, StableCount, NextCmdNum) -
       % For practical considerations, a replica can inherit its history from a
       % prior configuration (i.e. upgrade its configuration).
       {Ref, Client, update_conf,
-         {Vn, NewConf=#conf{version = Vn2, pids = Pids, args = ElasticModule}}
+         {Vn, NewConf=#conf{version = Vn2, pids = Pids, args = NewConfArgs}}
       } when Vn2 == Vn+1->
          case lists:member(self(), Pids) of
             true ->
                Client ! {Ref, ok},
+               ElasticModule = proplists:get_value(emod, NewConfArgs),
                ElasticModule:activeLoop(Core, NewConf, Unstable, StableCount, NextCmdNum);
             false ->
                immutableLoop(Core, Conf, Unstable, StableCount, NextCmdNum)
@@ -185,12 +196,13 @@ fork(Core, Conf, Unstable, StableCount, NextCmdNum, ForkNode, ForkArgs) ->
 pendingLoop(CoreModule, CoreArgs) ->
    receive
       % activate a configuration for a 'fresh' replicated object
-      {Ref, Client, activate, Conf=#conf{version=1, pids=Pids, args=ElasticModule}} ->
+      {Ref, Client, activate, Conf=#conf{version=1, pids=Pids, args=ConfArgs}} ->
          case lists:member(self(), Pids) of
             true ->
                Core = sm:new(CoreModule, CoreArgs),
                Unstable = ets:new(unstable_commands, []),
                Client ! {Ref, ok},
+               ElasticModule = proplists:get_value(emod, ConfArgs),
                ElasticModule:activeLoop(Core, Conf, Unstable, 0, 0);
             false ->
                pendingLoop(CoreModule, CoreArgs)
@@ -198,7 +210,7 @@ pendingLoop(CoreModule, CoreArgs) ->
 
       % activate a configuration and inherit the state from a prior config
       {Ref, Client, inherit, {_OldConf=#conf{version = Vn, pids = OldPids},
-                               NewConf=#conf{version = Vn2, pids = NewPids, args=ElasticModule},
+                               NewConf=#conf{version = Vn2, pids = NewPids, args=NewConfArgs},
                                Retry} } when Vn2 == Vn+1 ->
          case lists:member(self(), NewPids) of
             true ->
@@ -207,6 +219,7 @@ pendingLoop(CoreModule, CoreArgs) ->
                Unstable = ets:new(unstable_commands, []),
                ets:insert(Unstable, UnstableList),
                Client ! {Ref, ok},
+               ElasticModule = proplists:get_value(emod, NewConfArgs),
                ElasticModule:activeLoop(Core, NewConf, Unstable, StableCount, NextCmdNum);
 
             false ->
@@ -219,16 +232,13 @@ pendingLoop(CoreModule, CoreArgs) ->
          pendingLoop(CoreModule, CoreArgs)
    end.
 
-% Activate a configuration whose members are all in a pending state
-activate(Conf=#conf{version = 1, pids = Pids}, Retry) ->
-   repobj_utils:multicall(Pids, activate, Conf, Retry),
-   Conf.
-
-
 set_conf_args(Args, Conf) ->
+   CoreModule = proplists:get_value(core_module, Args),
    ElasticModule = case proplists:get_bool(primary_backup, Args) of
       true -> elastic_primary_backup;
       false -> elastic_chain
    end,
-   Conf#conf{args = ElasticModule}.
+
+   ConfArgs = [{cmod, CoreModule} , {emod, ElasticModule}],
+   Conf#conf{args = ConfArgs}.
 
