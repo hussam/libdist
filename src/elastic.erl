@@ -164,7 +164,7 @@ immutableLoop(Core, Conf=#conf{version=Vn}, Unstable, StableCount, NextCmdNum) -
 
       % for other tagged  messages, return a 'wedged' message
       {Ref, Client, _, _} ->
-         Client ! {Ref, {wedged, Conf}},
+         Client ! {Ref, {error, {wedged, Conf}}},
          immutableLoop(Core, Conf, Unstable, StableCount, NextCmdNum);
 
       % ignore everything else
@@ -228,7 +228,7 @@ pendingLoop(CoreModule, CoreArgs) ->
 
       % respond to all other queries with a 'pending' message
       {Ref, Client, _, _} ->
-         Client ! {Ref, pending},
+         Client ! {Ref, {error, pending}},
          pendingLoop(CoreModule, CoreArgs)
    end.
 
