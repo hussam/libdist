@@ -6,8 +6,7 @@
       call/4,
       anycall/4,
       multicall/4,
-      multicall/5,
-      collectMany/3
+      multicall/5
    ]).
 
 -include("repobj.hrl").
@@ -60,22 +59,21 @@ multicall(Pids, Tag, Request, Retry) ->
 multicall(Pids, Tag, Request, NumResponses, Retry) ->
    Parent = self(),
    Ref = make_ref(),
-   % create a sub-process for each Pid to make a call
-   [spawn(fun()-> Parent ! {Ref, Pid, call(Pid, Ref, Tag, Request, Retry)} end)
-      || Pid <- Pids],
-   collectMany(Ref, [], NumResponses).
-
-
-% Collect a required number of responses and return them
-collectMany(_Ref, Responses, Required) when length(Responses) == Required ->
-   Responses;
-collectMany(Ref, Responses, Required) ->
+   % spawn a collector process so that parent's inbox isn't jammed with unwanted
+   % messages beyond the required NumResponses
+   % FIXME: this is less efficient than just using the existing process
+   spawn(fun() ->
+            Collector = self(),
+            % create a sub-process for each Pid to make a call
+            [spawn(fun() ->
+                     Collector ! {Ref, Pid, call(Pid, Ref, Tag, Request, Retry)}
+                  end) || Pid <- Pids],
+            Parent ! {Ref, collectMany(Ref, [], NumResponses)}
+      end),
+   % wait for a response from the collector
    receive
-      {Ref, Pid, Result} ->
-         NewResponses = [ {Pid, Result} | lists:keydelete(Pid, 1, Responses) ],
-         collectMany(Ref, NewResponses, Required)
+      {Ref, Results} -> Results
    end.
-
 
 
 %%%%%%%%%%%%%%%%%%%%%
@@ -92,3 +90,16 @@ call(Pid, Ref, Tag, Request, RetryAfter) ->
       RetryAfter -> call(Pid, Ref, Tag, Request, RetryAfter)
    end.
 
+
+% Collect a required number of responses and return them
+collectMany(_Ref, Responses, Required) when length(Responses) == Required ->
+   Responses;
+collectMany(Ref, Responses, Required) ->
+   receive
+      {Ref, Pid, Result} ->
+         NewResponses = [ {Pid, Result} | lists:keydelete(Pid, 1, Responses) ],
+         collectMany(Ref, NewResponses, Required);
+
+      _ ->  % ignore old messages
+         collectMany(Ref, Responses, Required)
+   end.
