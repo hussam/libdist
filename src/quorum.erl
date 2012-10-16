@@ -22,18 +22,12 @@ new(CoreSettings = {Module, _}, QArgs, Nodes, Retry) ->
    % spawn new replicas
    Replicas = [
       spawn(N, ?MODULE, new_replica, [CoreSettings, QArgs]) || N <- Nodes ],
-   % compute the read/write quorum sizes
-   N = length(Replicas),
-   R = case proplists:lookup(r, QArgs) of
-      {r, ReadQuorumSize} -> ReadQuorumSize;
-      none -> trunc(N/2) + 1
-   end,
-   W = case proplists:lookup(w, QArgs) of
-      {w, WriteQuorumSize} -> WriteQuorumSize;
-      none -> trunc(N/2) + 1
-   end,
+
+   % compute the configuration arguments for quorum intersection
+   Args = make_conf_args(length(Replicas), QArgs),
+
    % create a configuration and inform all the replicas of it
-   Conf0 = #conf{protocol = ?MODULE, args = {Module, R, W}, version = 0},
+   Conf0 = #conf{protocol = ?MODULE, args = {Module, Args}, version = 0},
    reconfigure(Conf0, Replicas, [], Retry).   % returns the new configuration
 
 
@@ -46,13 +40,19 @@ new_replica({CoreModule, CoreArgs}, _RepArgs) ->
    loop(State).
 
 % Send a command to a replicated object
-do(#conf{pids = Replicas, args = {CoreModule, R, W}}, Command, Retry) ->
-   {QName, QSize} = case CoreModule:is_mutating(Command) of
-      true -> {w, W};
-      false -> {r, R}
+do(#conf{pids = Replicas, args = {CoreModule, Args}}, Command, Retry) ->
+   Targets = case proplists:get_bool(shuffle, Args) of
+      true -> shuffle(Replicas);
+      false -> Replicas
    end,
+
+   {QName, QSize} = case CoreModule:is_mutating(Command) of
+      true -> {w, proplists:get_value(w, Args)};
+      false -> {r, proplists:get_value(r, Args)}
+   end,
+
    maxResponse([ Response || {_Pid, Response} <-
-         repobj_utils:multicall(Replicas, QName, Command, QSize, Retry) ]).
+         repobj_utils:multicall(Targets, QName, Command, QSize, Retry) ]).
 
 % Fork one of the replicas in this replicated object
 fork(Obj, N, Node, Args) ->
@@ -61,24 +61,12 @@ fork(Obj, N, Node, Args) ->
 
 % Reconfigure the replicated object with a new set of replicas
 reconfigure(OldConf, NewPids, NewArgs, Retry) ->
-   #conf{version = OldVn, pids = OldPids, args = {CMod, OldR, OldW}} = OldConf,
-   % recompute the read/write quorum sizes
-   NewN = length(NewPids),
-   NewR = case proplists:lookup(r, NewArgs) of
-      {r, ReadQuorumSize} -> ReadQuorumSize;
-      none when OldR > NewN -> trunc(NewN/2) + 1;
-      _ -> OldR
-   end,
-   NewW = case proplists:lookup(w, NewArgs) of
-      {w, WriteQuorumSize} -> WriteQuorumSize;
-      none when OldW > NewN -> trunc(NewN/2) + 1;
-      _ -> OldW
-   end,
+   #conf{version = OldVn, pids = OldPids, args = {CMod, OldArgs}} = OldConf,
    % the new configuration
    NewConf = OldConf#conf{
       version = OldVn + 1,
       pids = NewPids,
-      args = {CMod, NewR, NewW}
+      args = {CMod, remake_conf_args(length(NewPids), NewArgs, OldArgs)}
    },
    % This takes out the replicas in the old configuration but not in the new one
    repobj_utils:multicall(OldPids, reconfigure, NewConf, Retry),
@@ -168,3 +156,59 @@ maxResponse({Count, _Response}, [Head = {Count1, _} | Tail]) when Count1 > Count
    maxResponse(Head, Tail);
 maxResponse(Max, [_Head | Tail]) ->
    maxResponse(Max, Tail).
+
+
+shuffle(List) ->
+   %% Determine the log n portion then randomize the list.
+   randomize(round(math:log(length(List)) + 0.5), List).
+
+randomize(1, List) ->
+   randomize(List);
+randomize(T, List) ->
+   lists:foldl(
+      fun(_E, Acc) -> randomize(Acc) end,
+      randomize(List),
+      lists:seq(1, T - 1)
+   ).
+
+randomize(List) ->
+   D = lists:map(fun(A) -> {random:uniform(), A} end, List),
+   {_, D1} = lists:unzip(lists:keysort(1, D)),
+   D1.
+
+
+make_conf_args(N, QArgs) ->
+   R = case proplists:lookup(r, QArgs) of
+      {r, ReadQuorumSize} -> ReadQuorumSize;
+      none -> trunc(N/2) + 1
+   end,
+   W = case proplists:lookup(w, QArgs) of
+      {w, WriteQuorumSize} -> WriteQuorumSize;
+      none -> trunc(N/2) + 1
+   end,
+   Shuffle = proplists:get_bool(shuffle, QArgs),
+
+   [{r, R}, {w, W}, {shuffle, Shuffle}].
+
+remake_conf_args(NewN, NewArgs, OldConfArgs) ->
+   OldR = proplists:get_value(r, OldConfArgs),
+   OldW = proplists:get_value(w, OldConfArgs),
+   OldShuffle = proplists:get_bool(shuffle, OldConfArgs),
+
+   NewR = case proplists:lookup(r, NewArgs) of
+      {r, ReadQuorumSize} -> ReadQuorumSize;
+      none when OldR > NewN -> trunc(NewN/2) + 1;
+      _ -> OldR
+   end,
+   NewW = case proplists:lookup(w, NewArgs) of
+      {w, WriteQuorumSize} -> WriteQuorumSize;
+      none when OldW > NewN -> trunc(NewN/2) + 1;
+      _ -> OldW
+   end,
+   NewShuffle = case proplists:lookup(shuffle, NewArgs) of
+      {shuffle, S} -> S;
+      none -> OldShuffle
+   end,
+
+   [{r, NewR}, {w, NewW}, {shuffle, NewShuffle}].
+
