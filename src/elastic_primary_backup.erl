@@ -21,7 +21,7 @@
 % State: ACTIVE
 % When a replica is in an active state it can add commands to its history and
 % respond to client requests. A replica stays in active state until it is wedged
-activeLoop(Core, Conf=#conf{pids = Replicas}, Unstable, StableCount, NextCmdNum) ->
+activeLoop(Core, Conf=#rconf{pids = Replicas}, Unstable, StableCount, NextCmdNum) ->
    Self = self(),
    [ Head | Tail ] = Replicas,
    {Role, Backups, NumBackups} = case Self of
@@ -45,7 +45,7 @@ activeLoop(Core, Conf=#conf{pids = Replicas}, Unstable, StableCount, NextCmdNum)
 activeLoop(State = #state{
             self = Self,
             core = Core,
-            conf = Conf = #conf{version = Vn},
+            conf = Conf = #rconf{version = Vn},
             role = Role,
             backups = Backups, num_backups = NumBackups,
             unstable = Unstable,

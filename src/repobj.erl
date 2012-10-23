@@ -24,16 +24,16 @@ new(CoreSettings, {RepProtocol, RepArgs, Nodes}, Retry) ->
    RepProtocol:new(CoreSettings, RepArgs, Nodes, Retry).
 
 % Execute a command synchronously on a replicated object
-do(Obj = #conf{protocol = Module}, Command, Retry) ->
+do(Obj = #rconf{protocol = Module}, Command, Retry) ->
    Module:do(Obj, Command, Retry).
 
-reconfigure(Obj = #conf{protocol = Module}, NewReplicas, NewArgs, Retry) ->
+reconfigure(Obj = #rconf{protocol = Module}, NewReplicas, NewArgs, Retry) ->
    Module:reconfigure(Obj, NewReplicas, NewArgs, Retry).
 
-fork(Obj = #conf{protocol = Module}, N, Node, Args) ->
+fork(Obj = #rconf{protocol = Module}, N, Node, Args) ->
    Module:fork(Obj, N, Node, Args).
 
-stop(Obj = #conf{protocol = Module}, N, Reason, Retry) ->
+stop(Obj = #rconf{protocol = Module}, N, Reason, Retry) ->
    Module:stop(Obj, N, Reason, Retry).
 
 
@@ -44,16 +44,16 @@ stop(Obj = #conf{protocol = Module}, N, Reason, Retry) ->
 
 % XXX: Is it cleaner if these were in a separate module?
 
-version(#conf{version = Vn}) -> Vn;
+version(#rconf{version = Vn}) -> Vn;
 version(_) -> not_a_repobj.
 
-pids(#conf{pids = Pids}) -> Pids;
+pids(#rconf{pids = Pids}) -> Pids;
 pids(_) -> not_a_repobj.
 
-protocol(#conf{protocol = Protocol}) -> Protocol;
+protocol(#rconf{protocol = Protocol}) -> Protocol;
 protocol(_) -> not_a_repobj.
 
-args(#conf{args = Args}) -> Args;
+args(#rconf{args = Args}) -> Args;
 args(_) -> not_a_repobj.
 
 

@@ -27,7 +27,7 @@ new(CoreSettings = {Module, _}, PBArgs, Nodes, Retry) ->
    Replicas = [
       spawn(N, ?MODULE, new_replica, [CoreSettings, PBArgs]) || N <- Nodes ],
    % create a configuration and inform all the replicas of it
-   Conf0 = #conf{protocol = ?MODULE, args = {Module, PBArgs}, version = 0},
+   Conf0 = #rconf{protocol = ?MODULE, args = {Module, PBArgs}, version = 0},
    reconfigure(Conf0, Replicas, [], Retry).   % returns the new configuration
 
 
@@ -35,13 +35,13 @@ new(CoreSettings = {Module, _}, PBArgs, Nodes, Retry) ->
 new_replica({CoreModule, CoreArgs}, _RepArgs) ->
    State = #state{
       core = sm:new(CoreModule, CoreArgs),
-      conf = #conf{protocol = ?MODULE},
+      conf = #rconf{protocol = ?MODULE},
       unstable = ets:new(unstable_commands, [])
    },
    loop(State).
 
 % Send a command to a replicated object
-do(#conf{pids=Replicas=[Primary | Backups], args={C, Args}}, Command, Retry) ->
+do(#rconf{pids=Replicas=[Primary | Backups], args={C, Args}}, Command, Retry) ->
    Target = case proplists:lookup(read_src, Args) of
       % non-mutating commands go to a random backup
       {_, backup} when Backups /= [] ->
@@ -66,13 +66,13 @@ do(#conf{pids=Replicas=[Primary | Backups], args={C, Args}}, Command, Retry) ->
 
 % Fork one of the replicas in this replicated object
 fork(Obj, N, Node, Args) ->
-   Pid = lists:nth(N, Obj#conf.pids),
+   Pid = lists:nth(N, Obj#rconf.pids),
    repobj_utils:cast(Pid, fork, {Node, Args}).
 
 % Reconfigure the replicated object with a new set of replicas
 reconfigure(OldConf, NewReplicas, NewArgs, Retry) ->
-   #conf{version = Vn, pids = OldReplicas, args = {Module, _}} = OldConf,
-   NewConf = OldConf#conf{
+   #rconf{version = Vn, pids = OldReplicas, args = {Module, _}} = OldConf,
+   NewConf = OldConf#rconf{
       version = Vn + 1,
       pids = NewReplicas,
       args = {Module, NewArgs}
@@ -84,11 +84,11 @@ reconfigure(OldConf, NewReplicas, NewArgs, Retry) ->
    NewConf.    % return the new configuration
 
 % Stop one of the replicas of the replicated object.
-stop(Obj=#conf{version = Vn, pids = OldReplicas}, N, Reason, Retry) ->
+stop(Obj=#rconf{version = Vn, pids = OldReplicas}, N, Reason, Retry) ->
    Pid = lists:nth(N, OldReplicas),
    repobj_utils:call(Pid, stop, Reason, Retry),
    NewReplicas = lists:delete(Pid, OldReplicas),
-   NewConf = Obj#conf{version = Vn + 1, pids = NewReplicas},
+   NewConf = Obj#rconf{version = Vn + 1, pids = NewReplicas},
    repobj_utils:multicall(NewReplicas, reconfigure, NewConf, Retry),
    NewConf.
 
@@ -171,7 +171,7 @@ loop(State = #state{
          loop(State);
 
       % Change this replica's configuration
-      {Ref, Client, reconfigure, NewConf=#conf{pids=[Head | Tail]}} ->
+      {Ref, Client, reconfigure, NewConf=#rconf{pids=[Head | Tail]}} ->
          Client ! {Ref, ok},
          if
             Head == self() ->

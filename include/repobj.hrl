@@ -1,4 +1,4 @@
--record(conf, {
+-record(rconf, {
       version = 0,   % configuration version number
       pids = [],     % list of replicas in the configuration
       protocol,      % replication protocol to use

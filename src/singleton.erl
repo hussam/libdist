@@ -12,23 +12,23 @@
 
 new(CoreSettings, _Args, [Node], _Retry) ->
    Replica = [ spawn(Node, ?MODULE, new_replica, [CoreSettings, _Args]) ],
-   #conf{protocol = ?MODULE, version = 1, pids = Replica}.  % return config
+   #rconf{protocol = ?MODULE, version = 1, pids = Replica}.  % return config
 
 new_replica({CoreModule, CoreArgs}, _RepArgs) ->
    Core = sm:new(CoreModule, CoreArgs),
-   Conf = #conf{protocol = ?MODULE, version = 1, pids = [self()]},
+   Conf = #rconf{protocol = ?MODULE, version = 1, pids = [self()]},
    loop(Core, Conf).
 
-do(_Obj=#conf{pids=[Pid]}, Command, Retry) ->
+do(_Obj=#rconf{pids=[Pid]}, Command, Retry) ->
    repobj_utils:call(Pid, command, Command, Retry).
 
 fork(Obj, N, Node, Args) ->
-   Pid = lists:nth(N, Obj#conf.pids),
+   Pid = lists:nth(N, Obj#rconf.pids),
    repobj_utils:cast(Pid, fork, {Node, Args}).
 
 reconfigure(OldConf, NewReplica, _NewArgs, Retry) ->
-   #conf{version = Vn, pids = [OldReplica]} = OldConf,
-   NewConf = OldConf#conf{version = Vn + 1, pids = [NewReplica]},
+   #rconf{version = Vn, pids = [OldReplica]} = OldConf,
+   NewConf = OldConf#rconf{version = Vn + 1, pids = [NewReplica]},
    repobj_utils:call(OldReplica, reconfigure, NewConf, Retry),
    if
       NewReplica == OldReplica -> do_nothing;
@@ -37,7 +37,7 @@ reconfigure(OldConf, NewReplica, _NewArgs, Retry) ->
    NewConf.
 
 stop(Obj, N, Reason, Retry) ->
-   Pid = lists:nth(N, Obj#conf.pids),
+   Pid = lists:nth(N, Obj#rconf.pids),
    repobj_utils:call(Pid, stop, Reason, Retry).
 
 
@@ -65,7 +65,7 @@ loop(Core, Conf) ->
       % Reconfigure this replica. This is meaningless here.
       {Ref, Client, reconfigure, _} ->
          Client ! {Ref, ok},
-         loop(Core, Conf#conf{version = Conf#conf.version + 1});
+         loop(Core, Conf#rconf{version = Conf#rconf.version + 1});
 
       % Return the current configuration
       {Ref, Client, get_conf} ->

@@ -19,7 +19,7 @@
 % State: ACTIVE
 % When a replica is in an active state it can add commands to its history and
 % respond to client requests. A replica stays in active state until it is wedged
-activeLoop(Core, Conf=#conf{pids = Replicas}, Unstable, StableCount, NextCmdNum) ->
+activeLoop(Core, Conf=#rconf{pids = Replicas}, Unstable, StableCount, NextCmdNum) ->
    {_Index, Prev, Next} = repobj_utils:ipn(self(), Replicas),
    State = #state{
       core = Core,
@@ -34,7 +34,7 @@ activeLoop(Core, Conf=#conf{pids = Replicas}, Unstable, StableCount, NextCmdNum)
 
 activeLoop(State = #state{
             core = Core,
-            conf = Conf = #conf{version = Vn},
+            conf = Conf = #rconf{version = Vn},
             prev = Prev,
             next = Next,
             unstable = Unstable,
