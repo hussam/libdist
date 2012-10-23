@@ -3,7 +3,6 @@
       new/4,
       new_replica/2,
       do/3,
-      fork/4,
       reconfigure/4,
       stop/4
    ]).
@@ -21,10 +20,6 @@ new_replica({CoreModule, CoreArgs}, _RepArgs) ->
 
 do(_Obj=#rconf{pids=[Pid]}, Command, Retry) ->
    repobj_utils:call(Pid, command, Command, Retry).
-
-fork(Obj, N, Node, Args) ->
-   Pid = lists:nth(N, Obj#rconf.pids),
-   repobj_utils:cast(Pid, fork, {Node, Args}).
 
 reconfigure(OldConf, NewReplica, _NewArgs, Retry) ->
    #rconf{version = Vn, pids = [OldReplica]} = OldConf,
@@ -52,14 +47,6 @@ loop(Core, Conf) ->
       % Handle a command for the core
       {Ref, Client, command, Command} ->
          Client ! {Ref, Core:do(Command)},
-         loop(Core, Conf);
-
-      % Fork this replica
-      {Ref, Client, fork, {ForkNode, ForkArgs}} ->
-         ForkedPid = spawn(ForkNode, fun() ->
-                  loop(Core:fork(ForkNode, ForkArgs), Conf)
-            end),
-         Client ! {Ref, ForkedPid},
          loop(Core, Conf);
 
       % Reconfigure this replica. This is meaningless here.

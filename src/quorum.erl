@@ -3,7 +3,6 @@
       new/4,
       new_replica/2,
       do/3,
-      fork/4,
       reconfigure/4,
       stop/4
    ]).
@@ -54,11 +53,6 @@ do(#rconf{pids = Replicas, args = {CoreModule, Args}}, Command, Retry) ->
    maxResponse([ Response || {_Pid, Response} <-
          repobj_utils:multicall(Targets, QName, Command, QSize, Retry) ]).
 
-% Fork one of the replicas in this replicated object
-fork(Obj, N, Node, Args) ->
-   Pid = lists:nth(N, Obj#rconf.pids),
-   repobj_utils:cast(Pid, fork, {Node, Args}).
-
 % Reconfigure the replicated object with a new set of replicas
 reconfigure(OldConf, NewPids, NewArgs, Retry) ->
    #rconf{version = OldVn, pids = OldPids, args = {CMod, OldArgs}} = OldConf,
@@ -105,18 +99,6 @@ loop(State = #state{
          NewCount = UpdatesCount + 1,
          Coordinator ! {Ref, {NewCount, Core:do(Command)}},
          loop(State#state{updates_count = NewCount});
-
-      % Fork this replica
-      {Ref, Client, fork, {ForkNode, ForkArgs}} ->
-         % fork the local core
-         ForkedState = State#state{
-            core = Core:fork(ForkNode, ForkArgs),
-            conf = undefined_after_fork
-         },
-         % create a forked replica and respond to client
-         ForkedPid = spawn(ForkNode, fun() -> loop(ForkedState) end),
-         Client ! {Ref, ForkedPid},
-         loop(State);
 
       % Change this replica's configuration
       {Ref, Client, reconfigure, NewConf=#rconf{pids=NewReplicas}} ->

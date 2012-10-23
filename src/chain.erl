@@ -3,7 +3,6 @@
       new/4,
       new_replica/2,
       do/3,
-      fork/4,
       reconfigure/4,
       stop/4
    ]).
@@ -45,11 +44,6 @@ do(_Obj=#rconf{pids = Pids = [Head | _], args = CoreModule}, Command, Retry) ->
       false -> lists:last(Pids)
    end,
    repobj_utils:call(Target, command, Command, Retry).
-
-% Fork one of the replicas in this replicated object
-fork(Obj, N, Node, Args) ->
-   Pid = lists:nth(N, Obj#rconf.pids),
-   repobj_utils:cast(Pid, fork, {Node, Args}).
 
 % Reconfigure the replicated object with a new set of replicas
 reconfigure(OldConf, NewReplicas, _NewArgs, Retry) ->
@@ -125,24 +119,6 @@ loop(State = #state{
                   ~p\n", [Other]),
                exit(error_stabilizing_at_chain_node)
          end;
-
-
-      % Fork this replica
-      {Ref, Client, fork, {ForkNode, ForkArgs}} ->
-         ForkedState = State#state{
-            core = Core:fork(ForkNode, ForkArgs),
-            conf = undefined_after_fork,
-            previous = undefined_after_fork,
-            next = undefined_after_fork
-         },
-         UnstableList = ets:tab2list(Unstable),
-         ForkedPid = spawn(ForkNode, fun() ->
-                  ForkedUnstable = ets:new(unstable_commands, []),
-                  ets:insert(ForkedUnstable, UnstableList),
-                  loop(ForkedState#state{unstable = ForkedUnstable})
-            end),
-         Client ! {Ref, ForkedPid},
-         loop(State);
 
       % Change this replica's configuration
       {Ref, Client, reconfigure, NewConf=#rconf{pids=NewReplicas}} ->

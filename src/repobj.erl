@@ -4,7 +4,6 @@
 -export([
       new/3,
       do/3,
-      fork/4,
       reconfigure/4,
       stop/4
    ]).
@@ -29,9 +28,6 @@ do(Obj = #rconf{protocol = Module}, Command, Retry) ->
 
 reconfigure(Obj = #rconf{protocol = Module}, NewReplicas, NewArgs, Retry) ->
    Module:reconfigure(Obj, NewReplicas, NewArgs, Retry).
-
-fork(Obj = #rconf{protocol = Module}, N, Node, Args) ->
-   Module:fork(Obj, N, Node, Args).
 
 stop(Obj = #rconf{protocol = Module}, N, Reason, Retry) ->
    Module:stop(Obj, N, Reason, Retry).

@@ -91,13 +91,6 @@ activeLoop(State = #state{
          Client ! {Ref, wedged},
          elastic:immutableLoop(Core, Conf, Unstable, StableCount, NextCmdNum);
 
-      % create a forked copy of this replica on this node
-      {Ref, Client, fork, {Vn, ForkNode, ForkArgs}} ->
-         Client ! { Ref,
-            elastic:fork(Core, Conf, Unstable, StableCount, NextCmdNum,
-               ForkNode, ForkArgs) },
-         activeLoop(State);
-
 
       % Return current configuration
       {Ref, Client, get_conf} ->

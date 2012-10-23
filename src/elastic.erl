@@ -5,7 +5,6 @@
       new/4,
       new_replica/2,
       do/3,
-      fork/4,
       reconfigure/4,
       stop/4
    ]).
@@ -18,8 +17,7 @@
 
 % Elastic protocol callbacks
 -export([
-      immutableLoop/5,
-      fork/7
+      immutableLoop/5
    ]).
 
 -include("repobj.hrl").
@@ -52,11 +50,6 @@ do(#rconf{pids=[Orderer | _], version=Vn, args=Args}, Command, Retry) ->
       true -> write
    end,
    repobj_utils:call(Orderer, CommandType, {Vn, Command}, Retry).
-
-% Fork one of the replicas in this replicated object
-fork(_Obj=#rconf{pids = Pids, version = Vn}, N, Node, Args) ->
-   Pid = lists:nth(N, Pids),
-   repobj_utils:cast(Pid, fork, {Vn, Node, Args}).
 
 % Reconfigure the replicated object with a new set of replicas
 reconfigure(OldConf, NewReplicas, NewArgs, Retry) ->
@@ -140,16 +133,11 @@ immutableLoop(Core, Conf=#rconf{version=Vn}, Unstable, StableCount, NextCmdNum) 
          end;
 
       % Request to inherit local state by a pending replica
-      {Ref, Replica, inherit, {Vn, ForkNode, ForkArgs}} ->
-         ForkedCore = Core:fork(ForkNode, ForkArgs),
+      {Ref, Replica, inherit, Vn} ->
+         % TODO: set inheriting replica to receive the current state of the core
+         % (i.e. state transfer, perhaps via proto-replica mechanism)
          UnstableList = ets:tab2list(Unstable),
-         Replica ! {Ref, {ForkedCore, UnstableList, StableCount, NextCmdNum}},
-         immutableLoop(Core, Conf, Unstable, StableCount, NextCmdNum);
-
-      % create a forked copy of this replica on this node
-      {Ref, Client, fork, {Vn, ForkNode, ForkArgs}} ->
-         Client ! {Ref, fork(Core, Conf, Unstable, StableCount, NextCmdNum,
-               ForkNode, ForkArgs)},
+         Replica ! {Ref, {UnstableList, StableCount, NextCmdNum}},
          immutableLoop(Core, Conf, Unstable, StableCount, NextCmdNum);
 
       % return the current configuration
@@ -171,18 +159,6 @@ immutableLoop(Core, Conf=#rconf{version=Vn}, Unstable, StableCount, NextCmdNum) 
       _ ->
          immutableLoop(Core, Conf, Unstable, StableCount, NextCmdNum)
    end.
-
-fork(Core, Conf, Unstable, StableCount, NextCmdNum, ForkNode, ForkArgs) ->
-   ForkedCore = Core:fork(ForkNode, ForkArgs),
-   UnstableList = ets:tab2list(Unstable),
-
-   spawn(ForkNode, fun() ->
-            ForkedUnstable = ets:new(unstable_commands, []),
-            ets:insert(ForkedUnstable, UnstableList),
-            immutableLoop(ForkedCore, Conf, ForkedUnstable, StableCount,
-               NextCmdNum)
-      end).
-
 
 
 %%%%%%%%%%%%%%%%%%%%%
@@ -214,7 +190,9 @@ pendingLoop(CoreModule, CoreArgs) ->
                                Retry} } when Vn2 == Vn+1 ->
          case lists:member(self(), NewPids) of
             true ->
-               [{_Responder, {Core, UnstableList, StableCount, NextCmdNum}}] =
+               % TODO: set new replica to get the full state from old replica
+               Core = sm:new(CoreModule, CoreArgs),
+               [{_Responder, {UnstableList, StableCount, NextCmdNum}}] =
                   repobj_utils:anycall(OldPids, inherit, {Vn, node(), CoreArgs}, Retry),
                Unstable = ets:new(unstable_commands, []),
                ets:insert(Unstable, UnstableList),
