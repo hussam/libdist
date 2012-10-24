@@ -5,6 +5,7 @@
       {modules, [
          repobj,
          repobj_utils,
+         rconf,
          singleton,
          chain,
          primary_backup,
