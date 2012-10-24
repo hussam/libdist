@@ -104,7 +104,7 @@ activeLoop(State = #state{
 
       % ignore other tagged messages and respond with current configuration
       {Ref, Client, _, _} ->
-         Client ! {Ref, {error, Conf}},
+         Client ! {Ref, {error, {reconfigured, Conf}}},
          activeLoop(State);
 
       % ignore everything else
