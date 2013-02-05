@@ -46,7 +46,7 @@ stop(Obj, N, Reason, Retry) ->
 
 % Initialize the state of the new replica
 init(_Me, {CoreModule, CoreArgs}) ->
-   Core = sm:new(CoreModule, CoreArgs),
+   Core = libdist_sm:new(CoreModule, CoreArgs),
    Conf = #rconf{protocol = ?MODULE, version = 1, pids = [self()]},
    {Core, Conf}.
 

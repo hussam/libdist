@@ -137,7 +137,7 @@ handle_msg(Me, Message, {pending, CoreModule, CoreArgs}) ->
       {Ref, Client, activate, Conf=#rconf{version=1, pids=Pids, args=ConfArgs}} ->
          case lists:member(Me, Pids) of
             true ->
-               Core = sm:new(CoreModule, CoreArgs),
+               Core = libdist_sm:new(CoreModule, CoreArgs),
                Unstable = ets:new(unstable_commands, []),
                Client ! {Ref, ok},
                ElasticModule = proplists:get_value(emod, ConfArgs),
@@ -154,7 +154,7 @@ handle_msg(Me, Message, {pending, CoreModule, CoreArgs}) ->
          case lists:member(Me, NewPids) of
             true ->
                % TODO: set new replica to get the full state from old replica
-               Core = sm:new(CoreModule, CoreArgs),
+               Core = libdist_sm:new(CoreModule, CoreArgs),
                [{_Responder, {UnstableList, StableCount, NextCmdNum}}] =
                   repobj_utils:anycall(OldPids, inherit, {Vn, node(), CoreArgs}, Retry),
                Unstable = ets:new(unstable_commands, []),

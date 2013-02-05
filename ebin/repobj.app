@@ -3,6 +3,7 @@
       {description, "Replicated Objects"},
       {vsn, "0.1"},
       {modules, [
+         libdist_sm,
          server,
          repobj,
          repobj_utils,

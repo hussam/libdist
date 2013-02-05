@@ -87,7 +87,7 @@ stop(Obj=#rconf{version = Vn, pids = OldReplicas}, N, Reason, Retry) ->
 % Initialize the state of a new replica
 init(_Me, {CoreModule, CoreArgs}) ->
    #state{
-      core = sm:new(CoreModule, CoreArgs),
+      core = libdist_sm:new(CoreModule, CoreArgs),
       conf = #rconf{protocol = ?MODULE}
    }.
 
