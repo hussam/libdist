@@ -1,10 +1,16 @@
 -module(quorum).
 -export([
       new/4,
-      new_replica/2,
+      new_replica/3,
       do/3,
       reconfigure/4,
       stop/4
+   ]).
+
+% Server callbacks
+-export([
+      init/2,
+      handle_msg/3
    ]).
 
 -include("repobj.hrl").
@@ -19,8 +25,7 @@
 % Create a new chain replicated state machine
 new(CoreSettings = {Module, _}, QArgs, Nodes, Retry) ->
    % spawn new replicas
-   Replicas = [
-      spawn(N, ?MODULE, new_replica, [CoreSettings, QArgs]) || N <- Nodes ],
+   Replicas = [ new_replica(N, CoreSettings, QArgs) || N <- Nodes ],
 
    % compute the configuration arguments for quorum intersection
    Args = make_conf_args(length(Replicas), QArgs),
@@ -31,12 +36,8 @@ new(CoreSettings = {Module, _}, QArgs, Nodes, Retry) ->
 
 
 % Start a new replica
-new_replica({CoreModule, CoreArgs}, _RepArgs) ->
-   State = #state{
-      core = sm:new(CoreModule, CoreArgs),
-      conf = #rconf{protocol = ?MODULE}
-   },
-   loop(State).
+new_replica(Node, CoreSettings, _RepArgs) ->
+   server:start(Node, quorum, CoreSettings).
 
 % Send a command to a replicated object
 do(#rconf{pids = Replicas, args = {CoreModule, Args}}, Command, Retry) ->
@@ -79,52 +80,64 @@ stop(Obj=#rconf{version = Vn, pids = OldReplicas}, N, Reason, Retry) ->
 
 
 
-%%%%%%%%%%%%%%%%%%%%%
-% Private Functions %
-%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%
+% Callback Functions %
+%%%%%%%%%%%%%%%%%%%%%%
 
-loop(State = #state{
+% Initialize the state of a new replica
+init(_Me, {CoreModule, CoreArgs}) ->
+   #state{
+      core = sm:new(CoreModule, CoreArgs),
+      conf = #rconf{protocol = ?MODULE}
+   }.
+
+% Handle a queued message
+handle_msg(Me, Message, State = #state{
       core = Core,
       conf = Conf,
       updates_count = UpdatesCount
    }) ->
-   receive
+   case Message of
       % Respond to a command as a member of a read quorum
       {Ref, Coordinator, r, Command} ->
          Coordinator ! {Ref, {UpdatesCount, Core:do(Command)}},
-         loop(State);
+         consume;
 
       % Respond to a command as a member of a write quorum
       {Ref, Coordinator, w, Command} ->
          NewCount = UpdatesCount + 1,
          Coordinator ! {Ref, {NewCount, Core:do(Command)}},
-         loop(State#state{updates_count = NewCount});
+         {consume, State#state{updates_count = NewCount}};
 
       % Change this replica's configuration
       {Ref, Client, reconfigure, NewConf=#rconf{pids=NewReplicas}} ->
          Client ! {Ref, ok},
-         Self = self(),
-         case lists:member(Self, NewReplicas) of
+         case lists:member(Me, NewReplicas) of
             true ->
-               loop(State#state{conf = NewConf});
+               {consume, State#state{conf = NewConf}};
             false ->
-               Core:stop(reconfiguration)
+               Core:stop(reconfiguration),
+               {stop, reconfiguration}
          end;
 
       % Return the configuration at this replica
       {Ref, Client, get_conf} ->
          Client ! {Ref, Conf},
-         loop(State);
+         consume;
 
       % Stop this replica
       {Ref, Client, stop, Reason} ->
-         Client ! {Ref, Core:stop(Reason)};
+         Client ! {Ref, Core:stop(Reason)},
+         {stop, Reason};
 
-      % Unexpected message
-      UnexpectedMessage ->
-         io:format("Received unexpected message ~p at ~p (~p)\n",
-            [UnexpectedMessage, self(), ?MODULE])
+      _ ->
+         no_match
    end.
+
+
+%%%%%%%%%%%%%%%%%%%%%
+% Private Functions %
+%%%%%%%%%%%%%%%%%%%%%
 
 
 % Given a list of responses from quorum replicas, return the response that is

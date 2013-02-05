@@ -1,10 +1,16 @@
 -module(primary_backup).
 -export([
       new/4,
-      new_replica/2,
+      new_replica/3,
       do/3,
       reconfigure/4,
       stop/4
+   ]).
+
+% Server callbacks
+-export([
+      init/2,
+      handle_msg/3
    ]).
 
 -include("repobj.hrl").
@@ -23,21 +29,15 @@
 % Create a new primary/backup replicated state machine
 new(CoreSettings = {Module, _}, PBArgs, Nodes, Retry) ->
    % spawn new replicas
-   Replicas = [
-      spawn(N, ?MODULE, new_replica, [CoreSettings, PBArgs]) || N <- Nodes ],
+   Replicas = [ new_replica(N, CoreSettings, PBArgs) || N <- Nodes ],
    % create a configuration and inform all the replicas of it
    Conf0 = #rconf{protocol = ?MODULE, args = {Module, PBArgs}, version = 0},
    reconfigure(Conf0, Replicas, [], Retry).   % returns the new configuration
 
 
 % Start a new replica
-new_replica({CoreModule, CoreArgs}, _RepArgs) ->
-   State = #state{
-      core = sm:new(CoreModule, CoreArgs),
-      conf = #rconf{protocol = ?MODULE},
-      unstable = ets:new(unstable_commands, [])
-   },
-   loop(State).
+new_replica(Node, CoreSettings, _RepArgs) ->
+   server:start(Node, primary_backup, CoreSettings).
 
 % Send a command to a replicated object
 do(#rconf{pids=Replicas=[Primary | Backups], args={C, Args}}, Command, Retry) ->
@@ -87,11 +87,21 @@ stop(Obj=#rconf{version = Vn, pids = OldReplicas}, N, Reason, Retry) ->
    NewConf.
 
 
-%%%%%%%%%%%%%%%%%%%%%
-% Private Functions %
-%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%
+% Callback Functions %
+%%%%%%%%%%%%%%%%%%%%%%
 
-loop(State = #state{
+% Initialize the state of a new replica
+init(_Me, {CoreModule, CoreArgs}) ->
+   #state{
+      core = sm:new(CoreModule, CoreArgs),
+      conf = #rconf{protocol = ?MODULE},
+      unstable = ets:new(unstable_commands, [])
+   }.
+
+
+% Handle a queued message
+handle_msg(Me, Message, State = #state{
       core = Core,
       conf = Conf,
       role = Role,
@@ -100,7 +110,7 @@ loop(State = #state{
       stable_count = StableCount,
       next_cmd_num = NextCmdNum
    }) ->
-   receive
+   case Message of
       % Handle command as a primary replica
       {Ref, Client, command, Command} when Role == primary ->
          case Core:is_mutating(Command) of
@@ -113,10 +123,10 @@ loop(State = #state{
                      Command
                   }),
                repobj_utils:multicast(Backups, command, {NextCmdNum, Command}),
-               loop(State#state{next_cmd_num = NextCmdNum + 1});
+               {consume, State#state{next_cmd_num = NextCmdNum + 1}};
             false ->
                Client ! {Ref, Core:do(Command)},
-               loop(State)
+               consume
          end;
 
       % Handle command as a backup replica
@@ -124,12 +134,12 @@ loop(State = #state{
          Core:do(Command),
          Primary ! {stabilized, StableCount},
          NewCount = StableCount + 1,
-         loop(State#state{stable_count = NewCount, next_cmd_num = NewCount});
+         {consume, State#state{stable_count=NewCount, next_cmd_num=NewCount}};
 
       % Handle query command as a backup replica
       {Ref, Client, command, Command} ->
          Client ! {Ref, Core:do(Command)},
-         loop(State);
+         consume;
 
       {stabilized, StableCount} ->
          NewStableCount = case ets:update_counter(Unstable, StableCount, -1) of
@@ -141,43 +151,43 @@ loop(State = #state{
             _ ->
                StableCount
          end,
-         loop(State#state{stable_count = NewStableCount});
+         {consume, State#state{stable_count = NewStableCount}};
 
       % Change this replica's configuration
       {Ref, Client, reconfigure, NewConf=#rconf{pids=[Head | Tail]}} ->
          Client ! {Ref, ok},
          if
-            Head == self() ->
-               loop(State#state{
+            Head == Me ->
+               {consume, State#state{
                      conf = NewConf,
                      role = primary,
                      backups = Tail,
                      num_backups = length(Tail)
-                  });
+                  }};
             true ->
-               case lists:member(self(), Tail) of
+               case lists:member(Me, Tail) of
                   true ->
-                     loop(State#state{
+                     {consume, State#state{
                            conf = NewConf,
                            role = backup,
                            backups = [],
                            num_backups = 0
-                        });
+                        }};
                   false ->
-                     Core:stop(reconfiguration)
+                     Core:stop(reconfigure),
+                     {stop, reconfigure}
                end
          end;
 
       {Ref, Client, get_conf} ->
          Client ! {Ref, Conf},
-         loop(State);
+         consume;
 
       % Stop this replica
       {Ref, Client, stop, Reason} ->
-         Client ! {Ref, Core:stop(Reason)};
+         Client ! {Ref, Core:stop(Reason)},
+         {stop, Reason};
 
-      % Unexpected message
-      UnexpectedMessage ->
-         io:format("Received unexpected message ~p at ~p (~p)\n",
-            [UnexpectedMessage, self(), ?MODULE])
+      _ ->
+         no_match
    end.

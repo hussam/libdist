@@ -1,22 +1,26 @@
 -module(singleton).
 -export([
       new/4,
-      new_replica/2,
+      new_replica/3,
       do/3,
       reconfigure/4,
       stop/4
    ]).
 
+% Server callbacks
+-export([
+      init/2,
+      handle_msg/3
+   ]).
+
 -include("repobj.hrl").
 
 new(CoreSettings, _Args, [Node], _Retry) ->
-   Replica = [ spawn(Node, ?MODULE, new_replica, [CoreSettings, _Args]) ],
+   Replica = [ new_replica(Node, CoreSettings, _Args) ],
    #rconf{protocol = ?MODULE, version = 1, pids = Replica}.  % return config
 
-new_replica({CoreModule, CoreArgs}, _RepArgs) ->
-   Core = sm:new(CoreModule, CoreArgs),
-   Conf = #rconf{protocol = ?MODULE, version = 1, pids = [self()]},
-   loop(Core, Conf).
+new_replica(Node, CoreSettings, _RepArgs) ->
+   server:start(Node, singleton, CoreSettings).
 
 do(_Obj=#rconf{pids=[Pid]}, Command, Retry) ->
    repobj_utils:call(Pid, command, Command, Retry).
@@ -36,35 +40,40 @@ stop(Obj, N, Reason, Retry) ->
    repobj_utils:call(Pid, stop, Reason, Retry).
 
 
-%%%%%%%%%%%%%%%%%%%%%
-% Private Functions %
-%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%
+% Callback Functions %
+%%%%%%%%%%%%%%%%%%%%%%
+
+% Initialize the state of the new replica
+init(_Me, {CoreModule, CoreArgs}) ->
+   Core = sm:new(CoreModule, CoreArgs),
+   Conf = #rconf{protocol = ?MODULE, version = 1, pids = [self()]},
+   {Core, Conf}.
 
 
-% Main loop for a standalone replica (i.e. no replication)
-loop(Core, Conf) ->
-   receive
+% Handle a queued message a standalone replica (i.e. no replication)
+handle_msg(_Me, Message, {Core, Conf}) ->
+   case Message of
       % Handle a command for the core
       {Ref, Client, command, Command} ->
          Client ! {Ref, Core:do(Command)},
-         loop(Core, Conf);
+         consume;
 
       % Reconfigure this replica. This is meaningless here.
       {Ref, Client, reconfigure, _} ->
          Client ! {Ref, ok},
-         loop(Core, Conf#rconf{version = Conf#rconf.version + 1});
+         {consume, {Core, Conf#rconf{version = Conf#rconf.version + 1}}};
 
       % Return the current configuration
       {Ref, Client, get_conf} ->
          Client ! {Ref, Conf},
-         loop(Core, Conf);
+         consume;
 
       % Stop this replica
       {Ref, Client, stop, Reason} ->
-         Client ! {Ref, Core:stop(Reason)};
+         Client ! {Ref, Core:stop(Reason)},
+         {stop, Reason};
 
-      % Unexpected message
-      UnexpectedMessage ->
-         io:format("Received unexpected message ~p at ~p (~p)\n",
-            [UnexpectedMessage, self(), ?MODULE])
+      _ ->
+         no_match
    end.

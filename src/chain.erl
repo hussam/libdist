@@ -1,10 +1,16 @@
 -module(chain).
 -export([
       new/4,
-      new_replica/2,
+      new_replica/3,
       do/3,
       reconfigure/4,
       stop/4
+   ]).
+
+% Server callbacks
+-export([
+      init/2,
+      handle_msg/3
    ]).
 
 -include("repobj.hrl").
@@ -22,20 +28,16 @@
 % Create a new chain replicated state machine
 new(CoreSettings = {Module, _}, ChainArgs, Nodes, Retry) ->
    % spawn new replicas
-   Replicas = [
-      spawn(N, ?MODULE, new_replica, [CoreSettings, ChainArgs]) || N <- Nodes ],
+   Replicas = [ new_replica(N, CoreSettings, ChainArgs) || N <- Nodes ],
    % create a configuration and inform all the replicas of it
    Conf0 = #rconf{protocol = ?MODULE, args = Module, version = 0},
    reconfigure(Conf0, Replicas, [], Retry).   % returns the new configuration
 
+
 % Start a new replica
-new_replica({CoreModule, CoreArgs}, _RepArgs) ->
-   State = #state{
-      core = sm:new(CoreModule, CoreArgs),
-      conf = #rconf{protocol = ?MODULE},
-      unstable = ets:new(unstable_commands, [])
-   },
-   loop(State).
+new_replica(Node, CoreSettings, _RepArgs) ->
+   server:start(Node, chain, CoreSettings).
+
 
 % Send a command to a replicated object
 do(_Obj=#rconf{pids = Pids = [Head | _], args = CoreModule}, Command, Retry) ->
@@ -44,6 +46,7 @@ do(_Obj=#rconf{pids = Pids = [Head | _], args = CoreModule}, Command, Retry) ->
       false -> lists:last(Pids)
    end,
    repobj_utils:call(Target, command, Command, Retry).
+
 
 % Reconfigure the replicated object with a new set of replicas
 reconfigure(OldConf, NewReplicas, _NewArgs, Retry) ->
@@ -55,6 +58,7 @@ reconfigure(OldConf, NewReplicas, _NewArgs, Retry) ->
    repobj_utils:multicall(NewReplicas, reconfigure, NewConf, Retry),
    NewConf.    % return the new configuration
 
+
 % Stop one of the replicas of the replicated object.
 stop(Obj=#rconf{version = Vn, pids = OldReplicas}, N, Reason, Retry) ->
    Pid = lists:nth(N, OldReplicas),
@@ -65,11 +69,22 @@ stop(Obj=#rconf{version = Vn, pids = OldReplicas}, N, Reason, Retry) ->
    NewConf.
 
 
-%%%%%%%%%%%%%%%%%%%%%
-% Private Functions %
-%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%
+% Callback Functions %
+%%%%%%%%%%%%%%%%%%%%%%
 
-loop(State = #state{
+
+% Initialize the state of a new replica
+init(_Me, {CoreModule, CoreArgs}) ->
+   #state{
+      core = sm:new(CoreModule, CoreArgs),
+      conf = #rconf{protocol = ?MODULE},
+      unstable = ets:new(unstable_commands, [])
+   }.
+
+
+% Handle a queued message
+handle_msg(Me, Message, State = #state{
       core = Core,
       conf = Conf,
       previous = Prev,
@@ -78,30 +93,30 @@ loop(State = #state{
       stable_count = StableCount,
       next_cmd_num = NextCmdNum
    }) ->
-   receive
+   case Message of
       % Handle command as the HEAD of the chain
       {Ref, Client, command, Command} when Prev == chain_head ->
          ets:insert(Unstable, {NextCmdNum, Ref, Client, Command}),
          Next ! {Ref, Client, command, NextCmdNum, Command},
-         loop(State#state{next_cmd_num = NextCmdNum + 1});
+         {consume, State#state{next_cmd_num = NextCmdNum + 1}};
 
       % Handle command as any replica in the MIDDLE of the chain
       {Ref, Client, command, NextCmdNum, Cmd} = Msg when Next /= chain_tail ->
          Next ! Msg,
          ets:insert(Unstable, {NextCmdNum, Ref, Client, Cmd}),
-         loop(State#state{next_cmd_num = NextCmdNum + 1});
+         {consume, State#state{next_cmd_num = NextCmdNum + 1}};
 
       % Handle update command as the TAIL of the chain
       {Ref, Client, command, NextCmdNum, Command} ->
          Client ! {Ref, Core:do(Command)},
          Prev ! {stabilized, NextCmdNum},
          NextCount = NextCmdNum + 1,
-         loop(State#state{next_cmd_num = NextCount, stable_count = NextCount});
+         {consume, State#state{next_cmd_num=NextCount, stable_count=NextCount}};
 
       % Handle query command as the TAIL of the chain
       {Ref, Client, command, Command} ->
          Client ! {Ref, Core:do(Command)},
-         loop(State);
+         consume;
 
       {stabilized, StableCount} = Msg ->
          case ets:lookup(Unstable, StableCount) of
@@ -112,7 +127,7 @@ loop(State = #state{
                   true -> do_not_forward
                end,
                ets:delete(Unstable, StableCount),
-               loop(State#state{stable_count = StableCount + 1});
+               {consume, State#state{stable_count = StableCount + 1}};
 
             Other ->
                io:format("Unexpected result when stabilizing at chain replica:
@@ -123,30 +138,29 @@ loop(State = #state{
       % Change this replica's configuration
       {Ref, Client, reconfigure, NewConf=#rconf{pids=NewReplicas}} ->
          Client ! {Ref, ok},
-         Self = self(),
-         case lists:member(Self, NewReplicas) of
+         case lists:member(Me, NewReplicas) of
             true ->
-               {_, NewPrev, NewNext} = repobj_utils:ipn(Self, NewReplicas),
-               loop(State#state{
+               {_, NewPrev, NewNext} = repobj_utils:ipn(Me, NewReplicas),
+               {consume, State#state{
                      conf = NewConf,
                      previous = NewPrev,
                      next = NewNext
-                  });
+                  }};
             false ->
-               Core:stop(reconfigure)
+               Core:stop(reconfigure),
+               {stop, reconfigure}
          end;
 
       % Return the configuration at this replica
       {Ref, Client, get_conf} ->
          Client ! {Ref, Conf},
-         loop(State);
+         consume;
 
       % Stop this replica
       {Ref, Client, stop, Reason} ->
-         Client ! {Ref, Core:stop(Reason)};
+         Client ! {Ref, Core:stop(Reason)},
+         {stop, Reason};
 
-      % Unexpected message
-      UnexpectedMessage ->
-         io:format("Received unexpected message ~p at ~p (~p)\n",
-            [UnexpectedMessage, self(), ?MODULE])
+      _ ->
+         no_match
    end.
