@@ -1,7 +1,7 @@
-{application, repobj,
+{application, libdist,
    [
-      {description, "Replicated Objects"},
-      {vsn, "0.1"},
+      {description, "A library to build distributed systems"},
+      {vsn, "0.2"},
       {modules, [
          libdist_sm,
          server,
