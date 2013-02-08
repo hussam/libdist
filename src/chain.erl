@@ -36,7 +36,7 @@ new(CoreSettings = {Module, _}, ChainArgs, Nodes, Retry) ->
 
 % Start a new replica
 new_replica(Node, CoreSettings, _RepArgs) ->
-   server:start(Node, chain, CoreSettings).
+   server:start(Node, ?MODULE, CoreSettings).
 
 
 % Send a command to a replicated object

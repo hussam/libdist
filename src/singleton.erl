@@ -20,7 +20,7 @@ new(CoreSettings, _Args, [Node], _Retry) ->
    #rconf{protocol = ?MODULE, version = 1, pids = Replica}.  % return config
 
 new_replica(Node, CoreSettings, _RepArgs) ->
-   server:start(Node, singleton, CoreSettings).
+   server:start(Node, ?MODULE, CoreSettings).
 
 do(_Obj=#rconf{pids=[Pid]}, Command, Retry) ->
    repobj_utils:call(Pid, command, Command, Retry).

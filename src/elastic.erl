@@ -45,7 +45,7 @@ new(CoreSettings = {CoreModule, _}, ElasticArgs, Nodes, Retry) ->
 
 % Start a new replica
 new_replica(Node, CoreSettings, _ElasticArgs) ->
-   server:start(Node, elastic, CoreSettings).
+   server:start(Node, ?MODULE, CoreSettings).
 
 % Send a command to a replicated object
 do(#rconf{pids=[Orderer | _], version=Vn, args=Args}, Command, Retry) ->

@@ -37,7 +37,7 @@ new(CoreSettings = {Module, _}, PBArgs, Nodes, Retry) ->
 
 % Start a new replica
 new_replica(Node, CoreSettings, _RepArgs) ->
-   server:start(Node, primary_backup, CoreSettings).
+   server:start(Node, ?MODULE, CoreSettings).
 
 % Send a command to a replicated object
 do(#rconf{pids=Replicas=[Primary | Backups], args={C, Args}}, Command, Retry) ->
