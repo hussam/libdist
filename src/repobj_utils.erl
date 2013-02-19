@@ -55,7 +55,7 @@ multicall(Pids, Tag, Request, Retry) ->
    multicall(Pids, Tag, Request, length(Pids), Retry).
 
 
-% send parallel requests to all processes and wait to get NumResponses responess
+% send parallel requests to all processes and wait to get NumResponses responses
 multicall(Pids, Tag, Request, NumResponses, Retry) ->
    Parent = self(),
    Ref = make_ref(),
