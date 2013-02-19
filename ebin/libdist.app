@@ -6,7 +6,7 @@
          libdist_sm,
          server,
          repobj,
-         repobj_utils,
+         libdist_utils,
          rconf,
          singleton,
          chain,

@@ -52,7 +52,7 @@ do(#rconf{pids = Replicas, args = {CoreModule, Args}}, Command, Retry) ->
    end,
 
    maxResponse([ Response || {_Pid, Response} <-
-         repobj_utils:multicall(Targets, QName, Command, QSize, Retry) ]).
+         libdist_utils:multicall(Targets, QName, Command, QSize, Retry) ]).
 
 % Reconfigure the replicated object with a new set of replicas
 reconfigure(OldConf, NewPids, NewArgs, Retry) ->
@@ -64,18 +64,18 @@ reconfigure(OldConf, NewPids, NewArgs, Retry) ->
       args = {CMod, remake_conf_args(length(NewPids), NewArgs, OldArgs)}
    },
    % This takes out the replicas in the old configuration but not in the new one
-   repobj_utils:multicall(OldPids, reconfigure, NewConf, Retry),
+   libdist_utils:multicall(OldPids, reconfigure, NewConf, Retry),
    % This integrates the replicas in the new configuration that are not old
-   repobj_utils:multicall(NewPids, reconfigure, NewConf, Retry),
+   libdist_utils:multicall(NewPids, reconfigure, NewConf, Retry),
    NewConf.    % return the new configuration
 
 % Stop one of the replicas of the replicated object.
 stop(Obj=#rconf{version = Vn, pids = OldReplicas}, N, Reason, Retry) ->
    Pid = lists:nth(N, OldReplicas),
-   repobj_utils:call(Pid, stop, Reason, Retry),
+   libdist_utils:call(Pid, stop, Reason, Retry),
    NewReplicas = lists:delete(Pid, OldReplicas),
    NewConf = Obj#rconf{version = Vn + 1, pids = NewReplicas},
-   repobj_utils:multicall(NewReplicas, reconfigure, NewConf, Retry),
+   libdist_utils:multicall(NewReplicas, reconfigure, NewConf, Retry),
    NewConf.
 
 

@@ -23,21 +23,21 @@ new_replica(Node, CoreSettings, _RepArgs) ->
    server:start(Node, ?MODULE, CoreSettings).
 
 do(_Obj=#rconf{pids=[Pid]}, Command, Retry) ->
-   repobj_utils:call(Pid, command, Command, Retry).
+   libdist_utils:call(Pid, command, Command, Retry).
 
 reconfigure(OldConf, NewReplica, _NewArgs, Retry) ->
    #rconf{version = Vn, pids = [OldReplica]} = OldConf,
    NewConf = OldConf#rconf{version = Vn + 1, pids = [NewReplica]},
-   repobj_utils:call(OldReplica, reconfigure, NewConf, Retry),
+   libdist_utils:call(OldReplica, reconfigure, NewConf, Retry),
    if
       NewReplica == OldReplica -> do_nothing;
-      true -> repobj_utils:call(NewReplica, reconfigure, NewConf, Retry)
+      true -> libdist_utils:call(NewReplica, reconfigure, NewConf, Retry)
    end,
    NewConf.
 
 stop(Obj, N, Reason, Retry) ->
    Pid = lists:nth(N, Obj#rconf.pids),
-   repobj_utils:call(Pid, stop, Reason, Retry).
+   libdist_utils:call(Pid, stop, Reason, Retry).
 
 
 %%%%%%%%%%%%%%%%%%%%%%

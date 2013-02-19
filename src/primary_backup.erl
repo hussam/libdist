@@ -60,7 +60,7 @@ do(#rconf{pids=Replicas=[Primary | Backups], args={C, Args}}, Command, Retry) ->
       _ ->
          Primary
    end,
-   repobj_utils:call(Target, command, Command, Retry).
+   libdist_utils:call(Target, command, Command, Retry).
 
 
 % Reconfigure the replicated object with a new set of replicas
@@ -72,18 +72,18 @@ reconfigure(OldConf, NewReplicas, NewArgs, Retry) ->
       args = {Module, NewArgs}
    },
    % This takes out the replicas in the old configuration but not in the new one
-   repobj_utils:multicall(OldReplicas, reconfigure, NewConf, Retry),
+   libdist_utils:multicall(OldReplicas, reconfigure, NewConf, Retry),
    % This integrates the replicas in the new configuration that are not old
-   repobj_utils:multicall(NewReplicas, reconfigure, NewConf, Retry),
+   libdist_utils:multicall(NewReplicas, reconfigure, NewConf, Retry),
    NewConf.    % return the new configuration
 
 % Stop one of the replicas of the replicated object.
 stop(Obj=#rconf{version = Vn, pids = OldReplicas}, N, Reason, Retry) ->
    Pid = lists:nth(N, OldReplicas),
-   repobj_utils:call(Pid, stop, Reason, Retry),
+   libdist_utils:call(Pid, stop, Reason, Retry),
    NewReplicas = lists:delete(Pid, OldReplicas),
    NewConf = Obj#rconf{version = Vn + 1, pids = NewReplicas},
-   repobj_utils:multicall(NewReplicas, reconfigure, NewConf, Retry),
+   libdist_utils:multicall(NewReplicas, reconfigure, NewConf, Retry),
    NewConf.
 
 
@@ -122,7 +122,7 @@ handle_msg(Me, Message, State = #state{
                      Client,
                      Command
                   }),
-               repobj_utils:multicast(Backups, command, {NextCmdNum, Command}),
+               libdist_utils:multicast(Backups, command, {NextCmdNum, Command}),
                {consume, State#state{next_cmd_num = NextCmdNum + 1}};
             false ->
                Client ! {Ref, Core:do(Command)},

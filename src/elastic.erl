@@ -40,7 +40,7 @@ new(CoreSettings = {CoreModule, _}, ElasticArgs, Nodes, Retry) ->
       }),
 
    % activate and return the new configuration
-   repobj_utils:multicall(Replicas, activate, Conf, Retry),
+   libdist_utils:multicall(Replicas, activate, Conf, Retry),
    Conf.
 
 % Start a new replica
@@ -54,7 +54,7 @@ do(#rconf{pids=[Orderer | _], version=Vn, args=Args}, Command, Retry) ->
       false -> read;
       true -> write
    end,
-   repobj_utils:call(Orderer, CommandType, {Vn, Command}, Retry).
+   libdist_utils:call(Orderer, CommandType, {Vn, Command}, Retry).
 
 % Reconfigure the replicated object with a new set of replicas
 reconfigure(OldConf, NewReplicas, NewArgs, Retry) ->
@@ -63,11 +63,11 @@ reconfigure(OldConf, NewReplicas, NewArgs, Retry) ->
    NewConf = set_conf_args(NewConfArgs, OldConf#rconf{version=Vn+1, pids=NewReplicas}),
 
    % wedge the old configuration by wedging any of its replicas
-   repobj_utils:anycall(OldReplicas, wedge, Vn, Retry),
+   libdist_utils:anycall(OldReplicas, wedge, Vn, Retry),
 
    % any active replicas in NewReplicas should be wedged (this could happen if
    % NewReplicas's intersection with OldReplicas is non-empty)
-   repobj_utils:multicall(NewReplicas, wedge, Vn, Retry),
+   libdist_utils:multicall(NewReplicas, wedge, Vn, Retry),
 
    % Update the NewReplicas to use the new configuration:
    % replicas in a PENDING state should inherit the state of a replica in the
@@ -75,7 +75,7 @@ reconfigure(OldConf, NewReplicas, NewArgs, Retry) ->
    % WEDGED state can just update their configuration
    {Pending, Wedged} = lists:foldl(
       fun(Pid, {Pending, Wedged}) ->
-            case repobj_utils:call(Pid, ping, ping, Retry) of
+            case libdist_utils:call(Pid, ping, ping, Retry) of
                pending ->
                   {[Pid | Pending], Wedged};
                {wedged, #rconf{version = Vn}} ->
@@ -87,29 +87,29 @@ reconfigure(OldConf, NewReplicas, NewArgs, Retry) ->
 
    % since PENDING replicas can only inherit from wedged replicas in the old
    % configuration, do that first before unwedging wedged replicas
-   repobj_utils:multicall(Pending, inherit, {OldConf, NewConf, Retry}, Retry),
-   repobj_utils:multicall(Wedged, update_conf, {Vn, NewConf}, Retry),
+   libdist_utils:multicall(Pending, inherit, {OldConf, NewConf, Retry}, Retry),
+   libdist_utils:multicall(Wedged, update_conf, {Vn, NewConf}, Retry),
    NewConf.    % return the new configuration
 
 % Stop one of the replicas of the replicated object.
 stop(Obj=#rconf{version = Vn, pids = OldReplicas}, N, Reason, Retry) ->
-   repobj_utils:multicall(OldReplicas, wedge, Vn, Retry),    % wedge all replicas
+   libdist_utils:multicall(OldReplicas, wedge, Vn, Retry),    % wedge all replicas
    Pid = lists:nth(N, OldReplicas),
-   repobj_utils:call(Pid, stop, Reason, Retry),
+   libdist_utils:call(Pid, stop, Reason, Retry),
    NewReplicas = lists:delete(Pid, OldReplicas),
    NewConf = Obj#rconf{version = Vn + 1, pids = NewReplicas},
-   repobj_utils:multicall(NewReplicas, update_conf, {Vn, NewConf}, Retry),
+   libdist_utils:multicall(NewReplicas, update_conf, {Vn, NewConf}, Retry),
    NewConf.
 
 
 % Wedge a configuration
 wedge(#rconf{version = Vn, pids = Pids}, Retry) ->
-   repobj_utils:anycall(Pids, wedge, Vn, Retry).
+   libdist_utils:anycall(Pids, wedge, Vn, Retry).
 
 % Wedge a particular replica in a configuration
 wedge(#rconf{version = Vn, pids = Pids}, N, Retry) ->
    Pid = lists:nth(N, Pids),
-   repobj_utils:call(Pid, wedge, Vn, Retry).
+   libdist_utils:call(Pid, wedge, Vn, Retry).
 
 
 
@@ -156,7 +156,7 @@ handle_msg(Me, Message, {pending, CoreModule, CoreArgs}) ->
                % TODO: set new replica to get the full state from old replica
                Core = libdist_sm:new(CoreModule, CoreArgs),
                [{_Responder, {UnstableList, StableCount, NextCmdNum}}] =
-                  repobj_utils:anycall(OldPids, inherit, {Vn, node(), CoreArgs}, Retry),
+                  libdist_utils:anycall(OldPids, inherit, {Vn, node(), CoreArgs}, Retry),
                Unstable = ets:new(unstable_commands, []),
                ets:insert(Unstable, UnstableList),
                Client ! {Ref, ok},

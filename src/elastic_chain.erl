@@ -26,7 +26,7 @@
 
 % Set/return the state of an active/non-immutable replica
 activate(Me, Core, Conf=#rconf{pids = Replicas}, Unstable, StableCount, NextCmdNum) ->
-   {_Index, Prev, Next} = repobj_utils:ipn(Me, Replicas),
+   {_Index, Prev, Next} = libdist_utils:ipn(Me, Replicas),
    #state{
       core = Core,
       conf = Conf,

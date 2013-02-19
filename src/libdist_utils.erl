@@ -1,4 +1,4 @@
--module(repobj_utils).
+-module(libdist_utils).
 -export([
       ipn/2,
       cast/3,
