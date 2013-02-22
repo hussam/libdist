@@ -13,7 +13,7 @@
 % RepObj Interface Implementation
 -export([
       new/1,
-      do/2,
+      handle_cmd/3,
       is_mutating/1,
       stop/2
    ]).
@@ -64,17 +64,20 @@ stop_replica(Obj, N, Reason) ->
 new(_Args = [Tag]) ->
    spawn(fun() -> loop(Tag) end).
 
-% The do/2 function takes in an instance Id, and a command and executes the
-% command. The echo server understands two types of commands, 'set_tag' which
-% modifies the internal state of the server, and 'echo' which is a 'readonly'
-% command that echoes the passed in message.
-do(Pid, {set_tag, NewTag}) ->
+% The handle_cmd/3 function takes in an instance Id, a flag of whether side
+% effects are allowed, and a command and executes the command. The echo server
+% understands two types of commands, 'set_tag' which modifies the internal state
+% of the server, and 'echo' which is a 'readonly' command that echoes the passed
+% in message. The side effects flag is meaningless here because the echo server
+% does not communicate with the outside world (the instance process's state is
+% part of the state of the state machine)
+handle_cmd(Pid, _, {set_tag, NewTag}) ->
    Pid ! {self(), set, NewTag},
    receive Result -> Result end;
-do(Pid, {echo, Message}) ->
+handle_cmd(Pid, _, {echo, Message}) ->
    Pid ! {self(), echo, Message},
    receive Result -> Result end;
-do(_, _) ->
+handle_cmd(_, _, _) ->
    undefined_op.
 
 

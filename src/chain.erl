@@ -1,4 +1,7 @@
 -module(chain).
+-compile({inline, [handle_msg/4]}).
+
+% Repobj interface
 -export([
       new/4,
       new_replica/3,
@@ -7,15 +10,25 @@
       stop/4
    ]).
 
+% State machine interface
+-export([
+      new/1,
+      handle_cmd/3,
+      is_mutating/1,
+      stop/2
+   ]).
+
 % Server callbacks
 -export([
       init/2,
       handle_msg/3
    ]).
 
+-include("helper_macros.hrl").
 -include("repobj.hrl").
 
 -record(state, {
+      me,
       core,
       conf,
       previous,
@@ -69,14 +82,33 @@ stop(Obj=#rconf{version = Vn, pids = OldReplicas}, N, Reason, Retry) ->
    NewConf.
 
 
-%%%%%%%%%%%%%%%%%%%%%%
-% Callback Functions %
-%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% State Machine Callbacks %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+
+new({CoreModule, CoreArgs}) ->
+   init([], {CoreModule, CoreArgs}).
+
+handle_cmd(State = #state{me = Me}, AllowSideEffects, Message) ->
+   handle_msg(Me, Message, AllowSideEffects, State).
+
+is_mutating(_) ->
+   true.
+
+stop(#state{core = Core}, Reason) ->
+   Core:stop(Reason).
+
+
+%%%%%%%%%%%%%%%%%%%%
+% Server Callbacks %
+%%%%%%%%%%%%%%%%%%%%
 
 
 % Initialize the state of a new replica
-init(_Me, {CoreModule, CoreArgs}) ->
+init(Me, {CoreModule, CoreArgs}) ->
    #state{
+      me = Me,
       core = libdist_sm:new(CoreModule, CoreArgs),
       conf = #rconf{protocol = ?MODULE},
       unstable = ets:new(unstable_commands, [])
@@ -84,7 +116,12 @@ init(_Me, {CoreModule, CoreArgs}) ->
 
 
 % Handle a queued message
-handle_msg(Me, Message, State = #state{
+handle_msg(Me, Message, State) ->
+   handle_msg(Me, Message, true, State).
+
+
+% Handle a queued message
+handle_msg(Me, Message, AllowSideEffects, State = #state{
       core = Core,
       conf = Conf,
       previous = Prev,
@@ -108,20 +145,20 @@ handle_msg(Me, Message, State = #state{
 
       % Handle update command as the TAIL of the chain
       {Ref, Client, command, NextCmdNum, Command} ->
-         Client ! {Ref, Core:do(Command)},
+         ?ECS({Ref, Core:do(AllowSideEffects, Command)}, AllowSideEffects, Client),
          Prev ! {stabilized, NextCmdNum},
          NextCount = NextCmdNum + 1,
          {consume, State#state{next_cmd_num=NextCount, stable_count=NextCount}};
 
       % Handle query command as the TAIL of the chain
       {Ref, Client, command, Command} ->
-         Client ! {Ref, Core:do(Command)},
+         ?ECS({Ref, Core:do(AllowSideEffects, Command)}, AllowSideEffects, Client),
          consume;
 
       {stabilized, StableCount} = Msg ->
          case ets:lookup(Unstable, StableCount) of
             [{StableCount, _Ref, _Client, Command}] ->
-               Core:do(Command),
+               Core:do(AllowSideEffects, Command),
                if
                   Prev /= chain_head -> Prev ! Msg;
                   true -> do_not_forward
@@ -136,8 +173,9 @@ handle_msg(Me, Message, State = #state{
          end;
 
       % Change this replica's configuration
+      % TODO: handle reconfiguration in nested protocols
       {Ref, Client, reconfigure, NewConf=#rconf{pids=NewReplicas}} ->
-         Client ! {Ref, ok},
+         ?ECS({Ref, ok}, AllowSideEffects, Client),
          case lists:member(Me, NewReplicas) of
             true ->
                {_, NewPrev, NewNext} = libdist_utils:ipn(Me, NewReplicas),
@@ -153,12 +191,12 @@ handle_msg(Me, Message, State = #state{
 
       % Return the configuration at this replica
       {Ref, Client, get_conf} ->
-         Client ! {Ref, Conf},
+         ?ECS({Ref, Conf}, AllowSideEffects, Client),
          consume;
 
       % Stop this replica
       {Ref, Client, stop, Reason} ->
-         Client ! {Ref, Core:stop(Reason)},
+         ?ECS({Ref, Core:stop(Reason)}, AllowSideEffects, Client),
          {stop, Reason};
 
       _ ->

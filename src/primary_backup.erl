@@ -1,4 +1,7 @@
 -module(primary_backup).
+-compile({inline, [handle_msg/4]}).
+
+% Repobj interface
 -export([
       new/4,
       new_replica/3,
@@ -7,15 +10,25 @@
       stop/4
    ]).
 
+% State machine interface
+-export([
+      new/1,
+      handle_cmd/3,
+      is_mutating/1,
+      stop/2
+   ]).
+
 % Server callbacks
 -export([
       init/2,
       handle_msg/3
    ]).
 
+-include("helper_macros.hrl").
 -include("repobj.hrl").
 
 -record(state, {
+      me,
       core,
       conf,
       role,
@@ -87,13 +100,33 @@ stop(Obj=#rconf{version = Vn, pids = OldReplicas}, N, Reason, Retry) ->
    NewConf.
 
 
-%%%%%%%%%%%%%%%%%%%%%%
-% Callback Functions %
-%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% State Machine Callbacks %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+
+new({CoreModule, CoreArgs}) ->
+   init([], {CoreModule, CoreArgs}).
+
+handle_cmd(State = #state{me = Me}, AllowSideEffects, Message) ->
+   handle_msg(Me, Message, AllowSideEffects, State).
+
+is_mutating(_) ->
+   true.
+
+stop(#state{core = Core}, Reason) ->
+   Core:stop(Reason).
+
+
+%%%%%%%%%%%%%%%%%%%%
+% Server Callbacks %
+%%%%%%%%%%%%%%%%%%%%
+
 
 % Initialize the state of a new replica
-init(_Me, {CoreModule, CoreArgs}) ->
+init(Me, {CoreModule, CoreArgs}) ->
    #state{
+      me = Me,
       core = libdist_sm:new(CoreModule, CoreArgs),
       conf = #rconf{protocol = ?MODULE},
       unstable = ets:new(unstable_commands, [])
@@ -101,7 +134,12 @@ init(_Me, {CoreModule, CoreArgs}) ->
 
 
 % Handle a queued message
-handle_msg(Me, Message, State = #state{
+handle_msg(Me, Message, State) ->
+   handle_msg(Me, Message, true, State).
+
+
+% Handle a queued message
+handle_msg(Me, Message, AllowSideEffects, State = #state{
       core = Core,
       conf = Conf,
       role = Role,
@@ -125,27 +163,27 @@ handle_msg(Me, Message, State = #state{
                libdist_utils:multicast(Backups, command, {NextCmdNum, Command}),
                {consume, State#state{next_cmd_num = NextCmdNum + 1}};
             false ->
-               Client ! {Ref, Core:do(Command)},
+               ?ECS({Ref, Core:do(AllowSideEffects, Command)}, AllowSideEffects, Client),
                consume
          end;
 
       % Handle command as a backup replica
       {_Ref, Primary, command, {NextCmdNum, Command}} ->
-         Core:do(Command),
+         Core:do(AllowSideEffects, Command),
          Primary ! {stabilized, StableCount},
          NewCount = StableCount + 1,
          {consume, State#state{stable_count=NewCount, next_cmd_num=NewCount}};
 
       % Handle query command as a backup replica
       {Ref, Client, command, Command} ->
-         Client ! {Ref, Core:do(Command)},
+         ?ECS({Ref, Core:do(AllowSideEffects, Command)}, AllowSideEffects, Client),
          consume;
 
       {stabilized, StableCount} ->
          NewStableCount = case ets:update_counter(Unstable, StableCount, -1) of
             0 ->
                [{_, 0, Ref, Client, Cmd}] = ets:lookup(Unstable, StableCount),
-               Client ! {Ref, Core:do(Cmd)},
+               ?ECS({Ref, Core:do(AllowSideEffects, Cmd)}, AllowSideEffects, Client),
                ets:delete(Unstable, StableCount),
                StableCount + 1;
             _ ->
@@ -154,8 +192,9 @@ handle_msg(Me, Message, State = #state{
          {consume, State#state{stable_count = NewStableCount}};
 
       % Change this replica's configuration
+      % TODO: handle reconfiguration in nested protocols
       {Ref, Client, reconfigure, NewConf=#rconf{pids=[Head | Tail]}} ->
-         Client ! {Ref, ok},
+         ?ECS({Ref, ok}, AllowSideEffects, Client),
          if
             Head == Me ->
                {consume, State#state{
@@ -180,12 +219,12 @@ handle_msg(Me, Message, State = #state{
          end;
 
       {Ref, Client, get_conf} ->
-         Client ! {Ref, Conf},
+         ?ECS({Ref, Conf}, AllowSideEffects, Client),
          consume;
 
       % Stop this replica
       {Ref, Client, stop, Reason} ->
-         Client ! {Ref, Core:stop(Reason)},
+         ?ECS({Ref, Core:stop(Reason)}, AllowSideEffects, Client),
          {stop, Reason};
 
       _ ->

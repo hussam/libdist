@@ -1,4 +1,7 @@
 -module(quorum).
+-compile({inline, [handle_msg/4]}).
+
+% Repobj interface
 -export([
       new/4,
       new_replica/3,
@@ -7,15 +10,25 @@
       stop/4
    ]).
 
+% State machine interface
+-export([
+      new/1,
+      handle_cmd/3,
+      is_mutating/1,
+      stop/2
+   ]).
+
 % Server callbacks
 -export([
       init/2,
       handle_msg/3
    ]).
 
+-include("helper_macros.hrl").
 -include("repobj.hrl").
 
 -record(state, {
+      me,
       core,
       conf,
       others = [],
@@ -79,20 +92,45 @@ stop(Obj=#rconf{version = Vn, pids = OldReplicas}, N, Reason, Retry) ->
    NewConf.
 
 
+%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% State Machine Callbacks %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-%%%%%%%%%%%%%%%%%%%%%%
-% Callback Functions %
-%%%%%%%%%%%%%%%%%%%%%%
+
+new({CoreModule, CoreArgs}) ->
+   init([], {CoreModule, CoreArgs}).
+
+handle_cmd(State = #state{me = Me}, AllowSideEffects, Message) ->
+   handle_msg(Me, Message, AllowSideEffects, State).
+
+is_mutating(_) ->
+   true.
+
+stop(#state{core = Core}, Reason) ->
+   Core:stop(Reason).
+
+
+%%%%%%%%%%%%%%%%%%%%
+% Server Callbacks %
+%%%%%%%%%%%%%%%%%%%%
+
 
 % Initialize the state of a new replica
-init(_Me, {CoreModule, CoreArgs}) ->
+init(Me, {CoreModule, CoreArgs}) ->
    #state{
+      me = Me,
       core = libdist_sm:new(CoreModule, CoreArgs),
       conf = #rconf{protocol = ?MODULE}
    }.
 
+
 % Handle a queued message
-handle_msg(Me, Message, State = #state{
+handle_msg(Me, Message, State) ->
+   handle_msg(Me, Message, true, State).
+
+
+% Handle a queued message
+handle_msg(Me, Message, AllowSideEffects, State = #state{
       core = Core,
       conf = Conf,
       updates_count = UpdatesCount
@@ -100,18 +138,19 @@ handle_msg(Me, Message, State = #state{
    case Message of
       % Respond to a command as a member of a read quorum
       {Ref, Coordinator, r, Command} ->
-         Coordinator ! {Ref, {UpdatesCount, Core:do(Command)}},
+         Coordinator ! {Ref, {UpdatesCount, Core:do(AllowSideEffects, Command)}},
          consume;
 
       % Respond to a command as a member of a write quorum
       {Ref, Coordinator, w, Command} ->
          NewCount = UpdatesCount + 1,
-         Coordinator ! {Ref, {NewCount, Core:do(Command)}},
+         Coordinator ! {Ref, {NewCount, Core:do(AllowSideEffects, Command)}},
          {consume, State#state{updates_count = NewCount}};
 
       % Change this replica's configuration
+      % TODO: handle reconfiguration in nested protocols
       {Ref, Client, reconfigure, NewConf=#rconf{pids=NewReplicas}} ->
-         Client ! {Ref, ok},
+         ?ECS({Ref, ok}, AllowSideEffects, Client),
          case lists:member(Me, NewReplicas) of
             true ->
                {consume, State#state{conf = NewConf}};
@@ -122,12 +161,12 @@ handle_msg(Me, Message, State = #state{
 
       % Return the configuration at this replica
       {Ref, Client, get_conf} ->
-         Client ! {Ref, Conf},
+         ?ECS({Ref, Conf}, AllowSideEffects, Client),
          consume;
 
       % Stop this replica
       {Ref, Client, stop, Reason} ->
-         Client ! {Ref, Core:stop(Reason)},
+         ?ECS({Ref, Core:stop(Reason)}, AllowSideEffects, Client),
          {stop, Reason};
 
       _ ->

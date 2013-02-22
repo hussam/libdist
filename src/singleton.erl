@@ -15,6 +15,8 @@
 
 -include("repobj.hrl").
 
+-define(AllowSideEffects, true).
+
 new(CoreSettings, _Args, [Node], _Retry) ->
    Replica = [ new_replica(Node, CoreSettings, _Args) ],
    #rconf{protocol = ?MODULE, version = 1, pids = Replica}.  % return config
@@ -56,7 +58,7 @@ handle_msg(_Me, Message, {Core, Conf}) ->
    case Message of
       % Handle a command for the core
       {Ref, Client, command, Command} ->
-         Client ! {Ref, Core:do(Command)},
+         Client ! {Ref, Core:do(?AllowSideEffects, Command)},
          consume;
 
       % Reconfigure this replica. This is meaningless here.
