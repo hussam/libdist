@@ -11,7 +11,7 @@
       handle_msg/3
    ]).
 
--include("repobj.hrl").
+-include("libdist.hrl").
 
 -define(AllowSideEffects, true).
 

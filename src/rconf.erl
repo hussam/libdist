@@ -12,7 +12,7 @@
       args/1,     set_args/2
    ]).
 
--include("repobj.hrl").
+-include("libdist.hrl").
 
 
 

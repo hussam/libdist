@@ -25,7 +25,7 @@
    ]).
 
 -include("helper_macros.hrl").
--include("repobj.hrl").
+-include("libdist.hrl").
 
 -record(state, {
       me,

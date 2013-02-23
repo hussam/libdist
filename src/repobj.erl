@@ -8,7 +8,7 @@
       stop/4
    ]).
 
--include("repobj.hrl").
+-include("libdist.hrl").
 
 % Create a new replicated object
 new(CoreSettings, {RepProtocol, RepArgs, Nodes}, Retry) ->

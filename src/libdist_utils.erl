@@ -9,7 +9,7 @@
       multicall/5
    ]).
 
--include("repobj.hrl").
+-include("libdist.hrl").
 
 % return the {Index, Previous, Next} elements of a chain member
 % the previous of the first chain member is chain_head

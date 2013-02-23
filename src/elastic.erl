@@ -26,7 +26,7 @@
       handle_msg/3
    ]).
 
--include("repobj.hrl").
+-include("libdist.hrl").
 
 % Create a new elastically replicated state machine
 new(CoreSettings = {CoreModule, _}, ElasticArgs, Nodes, Retry) ->

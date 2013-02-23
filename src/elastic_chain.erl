@@ -10,7 +10,7 @@
    ]).
 
 
--include("repobj.hrl").
+-include("libdist.hrl").
 
 -record(state, {
       core,
