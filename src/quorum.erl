@@ -89,7 +89,7 @@ call(#rconf{pids = Replicas, args = {CoreModule, Args}}, Command, Timeout) ->
    Refs = libdist_utils:multicast(Targets, QName, Command),
    case libdist_utils:collectmany(Refs, QSize, Timeout) of
       {ok, Responses} ->
-         max_response([ Resp || {_Pid, Resp} <- Responses ]);
+         {ok, max_response([ Resp || {_Pid, Resp} <- Responses ])};
       Error ->
          Error
    end.
