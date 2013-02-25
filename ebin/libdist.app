@@ -7,7 +7,6 @@
          server,
          repobj,
          libdist_utils,
-         rconf,
          singleton,
          chain,
          primary_backup,
