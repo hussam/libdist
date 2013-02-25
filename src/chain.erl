@@ -59,7 +59,7 @@ cast(_Obj=#rconf{pids = Pids = [Head | _], args = CoreModule}, Command) ->
       true -> Head;
       false -> lists:last(Pids)
    end,
-   libdist_utils:cast(Target, command, Command).
+   libdist_utils:cast(Target, {command, Command}).
 
 
 % Send a synchronous command to a replicated object
@@ -72,11 +72,11 @@ reconfigure(OldConf, NewReplicas, _NewArgs, Timeout) ->
    #rconf{version = Vn, pids = OldReplicas} = OldConf,
    NewConf = OldConf#rconf{ version = Vn + 1, pids = NewReplicas },
    % This takes out the replicas in the old configuration but not in the new one
-   Refs = libdist_utils:multicast(OldReplicas, reconfigure, NewConf),
+   Refs = libdist_utils:multicast(OldReplicas, {reconfigure, NewConf}),
    case libdist_utils:collectall(Refs, Timeout) of
       {ok, _} ->
          % This integrates replicas in the new configuration that are not old
-         Refs2 = libdist_utils:multicast(NewReplicas, reconfigure, NewConf),
+         Refs2 = libdist_utils:multicast(NewReplicas, {reconfigure, NewConf}),
          case libdist_utils:collectall(Refs2, Timeout) of
             {ok, _} ->
                {ok, NewConf};
@@ -92,11 +92,11 @@ reconfigure(OldConf, NewReplicas, _NewArgs, Timeout) ->
 % Stop one of the replicas of the replicated object.
 stop(Obj=#rconf{version = Vn, pids = OldReplicas}, N, Reason, Timeout) ->
    Pid = lists:nth(N, OldReplicas),
-   case libdist_utils:collect(libdist_utils:cast(Pid, stop, Reason), Timeout) of
+   case libdist_utils:collect(libdist_utils:cast(Pid, {stop, Reason}), Timeout) of
       {ok, _} ->
          NewReplicas = lists:delete(Pid, OldReplicas),
          NewConf = Obj#rconf{version = Vn + 1, pids = NewReplicas},
-         Refs = libdist_utils:multicast(NewReplicas, reconfigure, NewConf),
+         Refs = libdist_utils:multicast(NewReplicas, {reconfigure, NewConf}),
          case libdist_utils:collectall(Refs, Timeout) of
             {ok, _} ->
                {ok, NewConf};
@@ -159,7 +159,7 @@ handle_msg(Me, Message, AllowSideEffects, State = #state{
    }) ->
    case Message of
       % Handle command as the HEAD of the chain
-      {Ref, Client, command, Command} when Prev == chain_head ->
+      {Ref, Client, {command, Command}} when Prev == chain_head ->
          ets:insert(Unstable, {NextCmdNum, Ref, Client, Command}),
          Next ! {Ref, Client, command, NextCmdNum, Command},
          {consume, State#state{next_cmd_num = NextCmdNum + 1}};
@@ -178,7 +178,7 @@ handle_msg(Me, Message, AllowSideEffects, State = #state{
          {consume, State#state{next_cmd_num=NextCount, stable_count=NextCount}};
 
       % Handle query command as the TAIL of the chain
-      {Ref, Client, command, Command} ->
+      {Ref, Client, {command, Command}} ->
          ?ECS({Ref, Core:do(AllowSideEffects, Command)}, AllowSideEffects, Client),
          consume;
 
@@ -201,7 +201,7 @@ handle_msg(Me, Message, AllowSideEffects, State = #state{
 
       % Change this replica's configuration
       % TODO: handle reconfiguration in nested protocols
-      {Ref, Client, reconfigure, NewConf=#rconf{pids=NewReplicas}} ->
+      {Ref, Client, {reconfigure, NewConf=#rconf{pids=NewReplicas}}} ->
          ?ECS({Ref, ok}, AllowSideEffects, Client),
          case lists:member(Me, NewReplicas) of
             true ->
@@ -222,7 +222,7 @@ handle_msg(Me, Message, AllowSideEffects, State = #state{
          consume;
 
       % Stop this replica
-      {Ref, Client, stop, Reason} ->
+      {Ref, Client, {stop, Reason}} ->
          ?ECS({Ref, Core:stop(Reason)}, AllowSideEffects, Client),
          {stop, Reason};
 

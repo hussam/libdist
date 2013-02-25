@@ -71,7 +71,7 @@ cast(#rconf{pids = Replicas, args = {CoreModule, Args}}, Command) ->
    end,
 
    % XXX: user must watch out when collecting to choose max response
-   libdist_utils:multicast(Targets, QName, Command).
+   libdist_utils:multicast(Targets, {QName, Command}).
 
 
 % Send a synchronous command to a replicated object
@@ -86,7 +86,7 @@ call(#rconf{pids = Replicas, args = {CoreModule, Args}}, Command, Timeout) ->
       false -> {r, proplists:get_value(r, Args)}
    end,
 
-   Refs = libdist_utils:multicast(Targets, QName, Command),
+   Refs = libdist_utils:multicast(Targets, {QName, Command}),
    case libdist_utils:collectmany(Refs, QSize, Timeout) of
       {ok, Responses} ->
          {ok, max_response([ Resp || {_Pid, Resp} <- Responses ])};
@@ -106,11 +106,11 @@ reconfigure(OldConf, NewPids, NewArgs, Timeout) ->
       args = {CMod, remake_conf_args(length(NewPids), NewArgs, OldArgs)}
    },
    % This takes out replicas in the old configuration but not in the new one
-   Refs = libdist_utils:multicast(OldPids, reconfigure, NewConf),
+   Refs = libdist_utils:multicast(OldPids, {reconfigure, NewConf}),
    case libdist_utils:collectall(Refs, Timeout) of
       {ok, _} ->
          % This integrates replicas in the new configuration that are not old
-         Refs2 = libdist_utils:multicast(NewPids, reconfigure, NewConf),
+         Refs2 = libdist_utils:multicast(NewPids, {reconfigure, NewConf}),
          case libdist_utils:collectall(Refs2, Timeout) of
             {ok, _} ->
                {ok, NewConf};    % return the new configuration
@@ -125,11 +125,11 @@ reconfigure(OldConf, NewPids, NewArgs, Timeout) ->
 % Stop one of the replicas of the replicated object.
 stop(Obj=#rconf{version = Vn, pids = OldReplicas}, N, Reason, Timeout) ->
    Pid = lists:nth(N, OldReplicas),
-   case libdist_utils:collect(libdist_utils:cast(Pid, stop, Reason), Timeout) of
+   case libdist_utils:collect(libdist_utils:cast(Pid, {stop, Reason}), Timeout) of
       {ok, _} ->
          NewReplicas = lists:delete(Pid, OldReplicas),
          NewConf = Obj#rconf{version = Vn + 1, pids = NewReplicas},
-         Refs = libdist_utils:multicast(NewReplicas, reconfigure, NewConf),
+         Refs = libdist_utils:multicast(NewReplicas, {reconfigure, NewConf}),
          case libdist_utils:collectall(Refs, Timeout) of
             {ok, _} ->
                {ok, NewConf};
@@ -186,19 +186,19 @@ handle_msg(Me, Message, AllowSideEffects, State = #state{
    }) ->
    case Message of
       % Respond to a command as a member of a read quorum
-      {Ref, Coordinator, r, Command} ->
+      {Ref, Coordinator, {r, Command}} ->
          Coordinator ! {Ref, {UpdatesCount, Core:do(AllowSideEffects, Command)}},
          consume;
 
       % Respond to a command as a member of a write quorum
-      {Ref, Coordinator, w, Command} ->
+      {Ref, Coordinator, {w, Command}} ->
          NewCount = UpdatesCount + 1,
          Coordinator ! {Ref, {NewCount, Core:do(AllowSideEffects, Command)}},
          {consume, State#state{updates_count = NewCount}};
 
       % Change this replica's configuration
       % TODO: handle reconfiguration in nested protocols
-      {Ref, Client, reconfigure, NewConf=#rconf{pids=NewReplicas}} ->
+      {Ref, Client, {reconfigure, NewConf=#rconf{pids=NewReplicas}}} ->
          ?ECS({Ref, ok}, AllowSideEffects, Client),
          case lists:member(Me, NewReplicas) of
             true ->
@@ -214,7 +214,7 @@ handle_msg(Me, Message, AllowSideEffects, State = #state{
          consume;
 
       % Stop this replica
-      {Ref, Client, stop, Reason} ->
+      {Ref, Client, {stop, Reason}} ->
          ?ECS({Ref, Core:stop(Reason)}, AllowSideEffects, Client),
          {stop, Reason};
 

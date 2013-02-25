@@ -19,10 +19,10 @@ new(Node, CoreModule, CoreArgs) ->
    server:start(Node, ?MODULE, {CoreModule, CoreArgs}).
 
 do(Pid, Command) ->
-   libdist_utils:cast(Pid, command, Command).
+   libdist_utils:cast(Pid, {command, Command}).
 
 stop(Pid, Reason) ->
-   libdist_utils:cast(Pid, stop, Reason).
+   libdist_utils:cast(Pid, {stop, Reason}).
 
 
 %%%%%%%%%%%%%%%%%%%%%%
@@ -38,7 +38,7 @@ init(_Me, {CoreModule, CoreArgs}) ->
 handle_msg(Me, Message, Core) ->
    case Message of
       % Handle a command for the core
-      {Ref, Client, command, Command} ->
+      {Ref, Client, {command, Command}} ->
          Client ! {Ref, Core:do(?AllowSideEffects, Command)},
          consume;
 
@@ -48,7 +48,7 @@ handle_msg(Me, Message, Core) ->
          consume;
 
       % Stop this replica
-      {Ref, Client, stop, Reason} ->
+      {Ref, Client, {stop, Reason}} ->
          Client ! {Ref, Core:stop(Reason)},
          {stop, Reason};
 

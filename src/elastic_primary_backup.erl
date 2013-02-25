@@ -62,15 +62,15 @@ handle_msg(Me, Message, State = #state{
             next_cmd_num = NextCmdNum
    }) ->
    case Message of
-      {Ref, Client, read, {Vn, Command}} when Role == primary ->
+      {Ref, Client, {read, Vn, Command}} when Role == primary ->
          Client ! {Ref, Core:do(Command)},
          consume;
 
-      {_, _, read, _} ->
+      {_, _, {read, _, _}} ->
          consume;
 
       % Transition: add a command to stable history
-      {Ref, Client, write, {Vn, Command}} when Role == primary ->
+      {Ref, Client, {write, Vn, Command}} when Role == primary ->
          ets:insert(Unstable, {NextCmdNum, NumBackups, Ref, Client, Command}),
          Msg = {Me, Vn, write, NextCmdNum, Command},
          [ B ! Msg || B <- Backups],
@@ -97,7 +97,7 @@ handle_msg(Me, Message, State = #state{
 
       % Transition: wedgeState
       % take replica into immutable state
-      {Ref, Client, wedge, Vn} ->
+      {Ref, Client, {wedge, Vn}} ->
          Client ! {Ref, wedged},
          {consume, elastic:makeImmutable(Core, Conf, Unstable, StableCount,
                NextCmdNum)};
@@ -109,13 +109,13 @@ handle_msg(Me, Message, State = #state{
          consume;
 
       % Stop this replica
-      {Ref, Client, stop, Reason} ->
+      {Ref, Client, {stop, Reason}} ->
          Client ! {Ref, Core:stop(Reason)},
          {stop, Reason};
 
 
       % ignore other tagged messages and respond with current configuration
-      {Ref, Client, _, _} ->
+      {Ref, Client, _} ->
          Client ! {Ref, {error, {reconfigured, Conf}}},
          consume;
 

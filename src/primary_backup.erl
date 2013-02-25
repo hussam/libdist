@@ -74,7 +74,7 @@ cast(#rconf{pids=Replicas=[Primary | Backups], args={C, Args}}, Command) ->
       _ ->
          Primary
    end,
-   libdist_utils:cast(Target, command, Command).
+   libdist_utils:cast(Target, {command, Command}).
 
 
 % Send a synchronous command to a replicated object
@@ -91,11 +91,11 @@ reconfigure(OldConf, NewReplicas, NewArgs, Timeout) ->
       args = {Module, NewArgs}
    },
    % This takes out the replicas in the old configuration but not in the new one
-   Refs = libdist_utils:multicast(OldReplicas, reconfigure, NewConf),
+   Refs = libdist_utils:multicast(OldReplicas, {reconfigure, NewConf}),
    case libdist_utils:collectall(Refs, Timeout) of
       {ok, _} ->
          % This integrates replicas in the new configuration that are not old
-         Refs2 = libdist_utils:multicast(NewReplicas, reconfigure, NewConf),
+         Refs2 = libdist_utils:multicast(NewReplicas, {reconfigure, NewConf}),
          case libdist_utils:collectall(Refs2, Timeout) of
             {ok, _} ->
                {ok, NewConf};
@@ -110,11 +110,11 @@ reconfigure(OldConf, NewReplicas, NewArgs, Timeout) ->
 % Stop one of the replicas of the replicated object.
 stop(Obj=#rconf{version = Vn, pids = OldReplicas}, N, Reason, Timeout) ->
    Pid = lists:nth(N, OldReplicas),
-   case libdist_utils:collect(libdist_utils:cast(Pid, stop, Reason), Timeout) of
+   case libdist_utils:collect(libdist_utils:cast(Pid, {stop, Reason}), Timeout) of
       {ok, _} ->
          NewReplicas = lists:delete(Pid, OldReplicas),
          NewConf = Obj#rconf{version = Vn + 1, pids = NewReplicas},
-         Refs = libdist_utils:multicast(NewReplicas, reconfigure, NewConf),
+         Refs = libdist_utils:multicast(NewReplicas, {reconfigure, NewConf}),
          case libdist_utils:collectall(Refs, Timeout) of
             {ok, _} ->
                {ok, NewConf};
@@ -176,7 +176,7 @@ handle_msg(Me, Message, AllowSideEffects, State = #state{
    }) ->
    case Message of
       % Handle command as a primary replica
-      {Ref, Client, command, Command} when Role == primary ->
+      {Ref, Client, {command, Command}} when Role == primary ->
          case Core:is_mutating(Command) of
             true ->
                ets:insert(Unstable, {
@@ -186,7 +186,7 @@ handle_msg(Me, Message, AllowSideEffects, State = #state{
                      Client,
                      Command
                   }),
-               libdist_utils:multicast(Backups, command, {NextCmdNum, Command}),
+               libdist_utils:multicast(Backups, {command, NextCmdNum, Command}),
                {consume, State#state{next_cmd_num = NextCmdNum + 1}};
             false ->
                ?ECS({Ref, Core:do(AllowSideEffects, Command)}, AllowSideEffects, Client),
@@ -194,14 +194,14 @@ handle_msg(Me, Message, AllowSideEffects, State = #state{
          end;
 
       % Handle command as a backup replica
-      {_Ref, Primary, command, {NextCmdNum, Command}} ->
+      {_Ref, Primary, {command, NextCmdNum, Command}} ->
          Core:do(AllowSideEffects, Command),
          Primary ! {stabilized, StableCount},
          NewCount = StableCount + 1,
          {consume, State#state{stable_count=NewCount, next_cmd_num=NewCount}};
 
       % Handle query command as a backup replica
-      {Ref, Client, command, Command} ->
+      {Ref, Client, {command, Command}} ->
          ?ECS({Ref, Core:do(AllowSideEffects, Command)}, AllowSideEffects, Client),
          consume;
 
@@ -219,7 +219,7 @@ handle_msg(Me, Message, AllowSideEffects, State = #state{
 
       % Change this replica's configuration
       % TODO: handle reconfiguration in nested protocols
-      {Ref, Client, reconfigure, NewConf=#rconf{pids=[Head | Tail]}} ->
+      {Ref, Client, {reconfigure, NewConf=#rconf{pids=[Head | Tail]}}} ->
          ?ECS({Ref, ok}, AllowSideEffects, Client),
          if
             Head == Me ->
@@ -249,7 +249,7 @@ handle_msg(Me, Message, AllowSideEffects, State = #state{
          consume;
 
       % Stop this replica
-      {Ref, Client, stop, Reason} ->
+      {Ref, Client, {stop, Reason}} ->
          ?ECS({Ref, Core:stop(Reason)}, AllowSideEffects, Client),
          {stop, Reason};
 

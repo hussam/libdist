@@ -40,12 +40,14 @@ new(CoreSettings = {CoreModule, _}, ElasticArgs, Nodes, Retry) ->
       }),
 
    % activate and return the new configuration
-   libdist_utils:multicall(Replicas, activate, Conf, Retry),
+   libdist_utils:multicall(Replicas, {activate, Conf}, Retry),
    Conf.
+
 
 % Start a new replica
 new_replica(Node, CoreSettings, _ElasticArgs) ->
    server:start(Node, ?MODULE, CoreSettings).
+
 
 % Send a command to a replicated object
 do(#rconf{pids=[Orderer | _], version=Vn, args=Args}, Command, Retry) ->
@@ -56,6 +58,7 @@ do(#rconf{pids=[Orderer | _], version=Vn, args=Args}, Command, Retry) ->
    end,
    libdist_utils:call(Orderer, CommandType, {Vn, Command}, Retry).
 
+
 % Reconfigure the replicated object with a new set of replicas
 reconfigure(OldConf, NewReplicas, NewArgs, Retry) ->
    #rconf{version = Vn, pids = OldReplicas, args = OldArgs} = OldConf,
@@ -63,11 +66,11 @@ reconfigure(OldConf, NewReplicas, NewArgs, Retry) ->
    NewConf = set_conf_args(NewConfArgs, OldConf#rconf{version=Vn+1, pids=NewReplicas}),
 
    % wedge the old configuration by wedging any of its replicas
-   libdist_utils:anycall(OldReplicas, wedge, Vn, Retry),
+   libdist_utils:anycall(OldReplicas, {wedge, Vn}, Retry),
 
    % any active replicas in NewReplicas should be wedged (this could happen if
    % NewReplicas's intersection with OldReplicas is non-empty)
-   libdist_utils:multicall(NewReplicas, wedge, Vn, Retry),
+   libdist_utils:multicall(NewReplicas, {wedge, Vn}, Retry),
 
    % Update the NewReplicas to use the new configuration:
    % replicas in a PENDING state should inherit the state of a replica in the
@@ -75,7 +78,7 @@ reconfigure(OldConf, NewReplicas, NewArgs, Retry) ->
    % WEDGED state can just update their configuration
    {Pending, Wedged} = lists:foldl(
       fun(Pid, {Pending, Wedged}) ->
-            case libdist_utils:call(Pid, ping, ping, Retry) of
+            case libdist_utils:call(Pid, ping, Retry) of
                pending ->
                   {[Pid | Pending], Wedged};
                {wedged, #rconf{version = Vn}} ->
@@ -87,29 +90,30 @@ reconfigure(OldConf, NewReplicas, NewArgs, Retry) ->
 
    % since PENDING replicas can only inherit from wedged replicas in the old
    % configuration, do that first before unwedging wedged replicas
-   libdist_utils:multicall(Pending, inherit, {OldConf, NewConf, Retry}, Retry),
-   libdist_utils:multicall(Wedged, update_conf, {Vn, NewConf}, Retry),
+   libdist_utils:multicall(Pending, {inherit, OldConf, NewConf, Retry}, Retry),
+   libdist_utils:multicall(Wedged, {update_conf, Vn, NewConf}, Retry),
    NewConf.    % return the new configuration
+
 
 % Stop one of the replicas of the replicated object.
 stop(Obj=#rconf{version = Vn, pids = OldReplicas}, N, Reason, Retry) ->
-   libdist_utils:multicall(OldReplicas, wedge, Vn, Retry),    % wedge all replicas
+   libdist_utils:multicall(OldReplicas, {wedge, Vn}, Retry),    % wedge all replicas
    Pid = lists:nth(N, OldReplicas),
-   libdist_utils:call(Pid, stop, Reason, Retry),
+   libdist_utils:call(Pid, {stop, Reason}, Retry),
    NewReplicas = lists:delete(Pid, OldReplicas),
    NewConf = Obj#rconf{version = Vn + 1, pids = NewReplicas},
-   libdist_utils:multicall(NewReplicas, update_conf, {Vn, NewConf}, Retry),
+   libdist_utils:multicall(NewReplicas, {update_conf, Vn, NewConf}, Retry),
    NewConf.
 
 
 % Wedge a configuration
 wedge(#rconf{version = Vn, pids = Pids}, Retry) ->
-   libdist_utils:anycall(Pids, wedge, Vn, Retry).
+   libdist_utils:anycall(Pids, {wedge, Vn}, Retry).
 
 % Wedge a particular replica in a configuration
 wedge(#rconf{version = Vn, pids = Pids}, N, Retry) ->
    Pid = lists:nth(N, Pids),
-   libdist_utils:call(Pid, wedge, Vn, Retry).
+   libdist_utils:call(Pid, {wedge, Vn}, Retry).
 
 
 
@@ -134,7 +138,7 @@ makeImmutable(Core, Conf, Unstable, StableCount, NextCmdNum) ->
 handle_msg(Me, Message, {pending, CoreModule, CoreArgs}) ->
    case Message of
       % activate a configuration for a 'fresh' replicated object
-      {Ref, Client, activate, Conf=#rconf{version=1, pids=Pids, args=ConfArgs}} ->
+      {Ref, Client, {activate, Conf=#rconf{version=1, pids=Pids, args=ConfArgs}}} ->
          case lists:member(Me, Pids) of
             true ->
                Core = libdist_sm:new(CoreModule, CoreArgs),
@@ -148,15 +152,15 @@ handle_msg(Me, Message, {pending, CoreModule, CoreArgs}) ->
          end;
 
       % activate a configuration and inherit the state from a prior config
-      {Ref, Client, inherit, {_OldConf=#rconf{version = Vn, pids = OldPids},
+      {Ref, Client, {inherit, {_OldConf=#rconf{version = Vn, pids = OldPids},
                                NewConf=#rconf{version = Vn2, pids = NewPids, args=NewConfArgs},
-                               Retry} } when Vn2 == Vn+1 ->
+                               Retry}} } when Vn2 == Vn+1 ->
          case lists:member(Me, NewPids) of
             true ->
                % TODO: set new replica to get the full state from old replica
                Core = libdist_sm:new(CoreModule, CoreArgs),
                [{_Responder, {UnstableList, StableCount, NextCmdNum}}] =
-                  libdist_utils:anycall(OldPids, inherit, {Vn, node(), CoreArgs}, Retry),
+                  libdist_utils:anycall(OldPids, {inherit, Vn, node(), CoreArgs}, Retry),
                Unstable = ets:new(unstable_commands, []),
                ets:insert(Unstable, UnstableList),
                Client ! {Ref, ok},
@@ -172,7 +176,7 @@ handle_msg(Me, Message, {pending, CoreModule, CoreArgs}) ->
          end;
 
       % respond to all other queries with a 'pending' message
-      {Ref, Client, _, _} ->
+      {Ref, Client, _} ->
          Client ! {Ref, {error, pending}},
          consume
    end;
@@ -187,9 +191,8 @@ handle_msg(Me, Message, {immutable,
    case Message of
       % For practical considerations, a replica can inherit its history from a
       % prior configuration (i.e. upgrade its configuration).
-      {Ref, Client, update_conf,
-         {Vn, NewConf=#rconf{version = Vn2, pids = Pids, args = NewConfArgs}}
-      } when Vn2 == Vn+1->
+      {Ref, Client, {update_conf, Vn, NewConf=#rconf{
+               version = Vn2, pids = Pids, args = NewConfArgs}} } when Vn2 == Vn+1->
          case lists:member(Me, Pids) of
             true ->
                Client ! {Ref, ok},
@@ -201,7 +204,7 @@ handle_msg(Me, Message, {immutable,
          end;
 
       % Request to inherit local state by a pending replica
-      {Ref, Replica, inherit, Vn} ->
+      {Ref, Replica, {inherit, Vn}} ->
          % TODO: set inheriting replica to receive the current state of the core
          % (i.e. state transfer, perhaps via proto-replica mechanism)
          UnstableList = ets:tab2list(Unstable),
@@ -214,12 +217,12 @@ handle_msg(Me, Message, {immutable,
          consume;
 
       % stop this replica
-      {Ref, Client, stop, Reason} ->
+      {Ref, Client, {stop, Reason}} ->
          Client ! {Ref, Core:stop(Reason)},
          {stop, Reason};
 
       % for other tagged  messages, return a 'wedged' message
-      {Ref, Client, _, _} ->
+      {Ref, Client, _} ->
          Client ! {Ref, {error, {wedged, Conf}}},
          consume;
 

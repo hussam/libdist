@@ -2,9 +2,9 @@
 
 % Async comm
 -export([
-      cast/3,
+      cast/2,
       collect/2,
-      multicast/3,
+      multicast/2,
       collectany/2,
       collectmany/3,
       collectall/2
@@ -12,10 +12,10 @@
 
 % Sync comm
 -export([
-      call/4,
-      anycall/4,
-      multicall/4,
-      multicall/5
+      call/3,
+      anycall/3,
+      multicall/3,
+      multicall/4
    ]).
 
 % General utility
@@ -46,20 +46,20 @@ ipn(Pid, [_ | Tail], Index) -> ipn(Pid, Tail, Index + 1).
 
 % send an asynchronous request to the given process
 % returns the request's reference
-cast(Pid, Tag, Request) ->
+cast(Pid, Request) ->
    Ref = make_ref(),
-   Pid ! {Ref, self(), Tag, Request},
+   Pid ! {Ref, self(), Request},
    Ref.
 
 
 % send an asynchronous request to all the processes of a list
 % returns the request's reference
-multicast(Pids, Tag, Request) ->
+multicast(Pids, Request) ->
    Parent = self(),
    Ref = make_ref(),
    % Each request is tagged with {Ref, Pid} so that when collecting we know
    % exactly which Pids timed out
-   [spawn(fun() -> Pid ! {{Ref, Pid}, Parent, Tag, Request} end) || Pid <- Pids],
+   [spawn(fun() -> Pid ! {{Ref, Pid}, Parent, Request} end) || Pid <- Pids],
    {Ref, Pids}.
 
 
@@ -94,23 +94,23 @@ collectall({Ref, Pids}, Timeout) ->
 
 
 % send synchronous request to a process
-call(Pid, Tag, Request, Retry) ->
-   call(Pid, make_ref(), Tag, Request, Retry).
+call(Pid, Request, Retry) ->
+   call(Pid, make_ref(), Request, Retry).
 
 
 % send parallel requests to all processes in a list and wait for one response
-anycall(Pids, Tag, Request, Retry) ->
-   multicall(Pids, Tag, Request, 1, Retry).
+anycall(Pids, Request, Retry) ->
+   multicall(Pids, Request, 1, Retry).
 
 
 % send parallel requests to all processes in a list and wait for all responses
-multicall(Pids, Tag, Request, Retry) ->
-   multicall(Pids, Tag, Request, length(Pids), Retry).
+multicall(Pids, Request, Retry) ->
+   multicall(Pids, Request, length(Pids), Retry).
 
 
 
 % send parallel requests to all processes and wait to get NumResponses responses
-multicall(Pids, Tag, Request, NumResponses, Retry) ->
+multicall(Pids, Request, NumResponses, Retry) ->
    Parent = self(),
    Ref = make_ref(),
    % spawn a collector process so that parent's inbox isn't jammed with unwanted
@@ -120,7 +120,7 @@ multicall(Pids, Tag, Request, NumResponses, Retry) ->
             Collector = self(),
             % create a sub-process for each Pid to make a call
             [spawn(fun() ->
-                     Collector ! {{Ref, Pid}, call(Pid, Ref, Tag, Request, Retry)}
+                     Collector ! {{Ref, Pid}, call(Pid, Ref, Request, Retry)}
                   end) || Pid <- Pids],
             Parent ! {Ref, collectMany(Ref, Pids, [], NumResponses, infinity)}
       end),
@@ -136,12 +136,12 @@ multicall(Pids, Tag, Request, NumResponses, Retry) ->
 
 
 % send synchronous request to a given Pid
-call(Pid, Ref, Tag, Request, RetryAfter) ->
-   Pid ! {Ref, self(), Tag, Request},
+call(Pid, Ref, Request, RetryAfter) ->
+   Pid ! {Ref, self(), Request},
    receive
       {Ref, Result} -> Result
    after
-      RetryAfter -> call(Pid, Ref, Tag, Request, RetryAfter)
+      RetryAfter -> call(Pid, Ref, Request, RetryAfter)
    end.
 
 
