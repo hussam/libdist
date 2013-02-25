@@ -4,7 +4,8 @@
 -export([
       new/4,
       new_replica/3,
-      do/3,
+      cast/2,
+      call/3,
       reconfigure/4,
       stop/4
    ]).
@@ -49,8 +50,11 @@ new_replica(Node, CoreSettings, _ElasticArgs) ->
    server:start(Node, ?MODULE, CoreSettings).
 
 
+cast(_Conf, _Command) ->
+   {error, not_valid_for_this_protocol}.
+
 % Send a command to a replicated object
-do(#rconf{pids=[Orderer | _], version=Vn, args=Args}, Command, Retry) ->
+call(#rconf{pids=[Orderer | _], version=Vn, args=Args}, Command, Retry) ->
    CoreModule = proplists:get_value(cmod, Args),
    CommandType = case CoreModule:is_mutating(Command) of
       false -> read;
