@@ -1,8 +1,8 @@
 -module(singleton).
 -export([
       new/3,
-      do/3,
-      stop/3
+      do/2,
+      stop/2
    ]).
 
 % Server callbacks
@@ -18,11 +18,11 @@
 new(Node, CoreModule, CoreArgs) ->
    server:start(Node, ?MODULE, {CoreModule, CoreArgs}).
 
-do(Pid, Command, Retry) ->
-   libdist_utils:call(Pid, command, Command, Retry).
+do(Pid, Command) ->
+   libdist_utils:cast(Pid, command, Command).
 
-stop(Pid, Reason, Retry) ->
-   libdist_utils:call(Pid, stop, Reason, Retry).
+stop(Pid, Reason) ->
+   libdist_utils:cast(Pid, stop, Reason).
 
 
 %%%%%%%%%%%%%%%%%%%%%%

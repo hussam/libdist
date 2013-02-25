@@ -43,11 +43,11 @@ start_pb(Nodes) ->
 
 % Send a message to be echoed by the replicated object
 echo(Obj, Message) ->
-   repobj:do(Obj, {echo, Message}, ?TIMEOUT).
+   repobj:call(Obj, {echo, Message}, ?TIMEOUT).
 
 % Updated the tag used by the echo server
 set_tag(Obj, NewTag) ->
-   repobj:do(Obj, {set_tag, NewTag}, ?TIMEOUT).
+   repobj:call(Obj, {set_tag, NewTag}, ?TIMEOUT).
 
 % Stop the nth replica of a replicated object
 stop_replica(Obj, N, Reason) ->

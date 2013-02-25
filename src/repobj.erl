@@ -3,7 +3,8 @@
 % Interface for manipulating a replicated object
 -export([
       new/3,
-      do/3,
+      cast/2,
+      call/3,
       reconfigure/4,
       stop/4
    ]).
@@ -11,16 +12,20 @@
 -include("libdist.hrl").
 
 % Create a new replicated object
-new(CoreSettings, {RepProtocol, RepArgs, Nodes}, Retry) ->
-   RepProtocol:new(CoreSettings, RepArgs, Nodes, Retry).
+new(CoreSettings, {RepProtocol, RepArgs, Nodes}, Timeout) ->
+   RepProtocol:new(CoreSettings, RepArgs, Nodes, Timeout).
 
-% Execute a command synchronously on a replicated object
-do(Obj = #rconf{protocol = Module}, Command, Retry) ->
-   Module:do(Obj, Command, Retry).
+% Send an asynchronous command to a replicated object
+cast(Obj = #rconf{protocol = Module}, Command) ->
+   Module:cast(Obj, Command).
 
-reconfigure(Obj = #rconf{protocol = Module}, NewReplicas, NewArgs, Retry) ->
-   Module:reconfigure(Obj, NewReplicas, NewArgs, Retry).
+% Send a synchronous command to a replicated object
+call(Obj = #rconf{protocol = Module}, Command, Timeout) ->
+   Module:call(Obj, Command, Timeout).
 
-stop(Obj = #rconf{protocol = Module}, N, Reason, Retry) ->
-   Module:stop(Obj, N, Reason, Retry).
+reconfigure(Obj = #rconf{protocol = Module}, NewReplicas, NewArgs, Timeout) ->
+   Module:reconfigure(Obj, NewReplicas, NewArgs, Timeout).
+
+stop(Obj = #rconf{protocol = Module}, N, Reason, Timeout) ->
+   Module:stop(Obj, N, Reason, Timeout).
 

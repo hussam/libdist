@@ -5,7 +5,8 @@
 -export([
       new/4,
       new_replica/3,
-      do/3,
+      cast/2,
+      call/3,
       reconfigure/4,
       stop/4
    ]).
@@ -24,6 +25,11 @@
       handle_msg/3
    ]).
 
+% Other functions
+-export([
+      max_response/1
+   ]).
+
 -include("helper_macros.hrl").
 -include("libdist.hrl").
 
@@ -36,7 +42,7 @@
    }).
 
 % Create a new chain replicated state machine
-new(CoreSettings = {Module, _}, QArgs, Nodes, Retry) ->
+new(CoreSettings = {Module, _}, QArgs, Nodes, Timeout) ->
    % spawn new replicas
    Replicas = [ new_replica(N, CoreSettings, QArgs) || N <- Nodes ],
 
@@ -45,15 +51,31 @@ new(CoreSettings = {Module, _}, QArgs, Nodes, Retry) ->
 
    % create a configuration and inform all the replicas of it
    Conf0 = #rconf{protocol = ?MODULE, args = {Module, Args}, version = 0},
-   reconfigure(Conf0, Replicas, [], Retry).   % returns the new configuration
+   reconfigure(Conf0, Replicas, [], Timeout).   % return includes configuration
 
 
 % Start a new replica
 new_replica(Node, CoreSettings, _RepArgs) ->
    server:start(Node, ?MODULE, CoreSettings).
 
-% Send a command to a replicated object
-do(#rconf{pids = Replicas, args = {CoreModule, Args}}, Command, Retry) ->
+% Send an asynchronous command to a replicated object
+cast(#rconf{pids = Replicas, args = {CoreModule, Args}}, Command) ->
+   Targets = case proplists:get_bool(shuffle, Args) of
+      true -> shuffle(Replicas);
+      false -> Replicas
+   end,
+
+   QName = case CoreModule:is_mutating(Command) of
+      true -> w;
+      false -> r
+   end,
+
+   % XXX: user must watch out when collecting to choose max response
+   libdist_utils:multicast(Targets, QName, Command).
+
+
+% Send a synchronous command to a replicated object
+call(#rconf{pids = Replicas, args = {CoreModule, Args}}, Command, Timeout) ->
    Targets = case proplists:get_bool(shuffle, Args) of
       true -> shuffle(Replicas);
       false -> Replicas
@@ -64,11 +86,18 @@ do(#rconf{pids = Replicas, args = {CoreModule, Args}}, Command, Retry) ->
       false -> {r, proplists:get_value(r, Args)}
    end,
 
-   maxResponse([ Response || {_Pid, Response} <-
-         libdist_utils:multicall(Targets, QName, Command, QSize, Retry) ]).
+   Refs = libdist_utils:multicast(Targets, QName, Command),
+   case libdist_utils:collectmany(Refs, QSize, Timeout) of
+      {ok, Responses} ->
+         max_response([ Resp || {_Pid, Resp} <- Responses ]);
+      Error ->
+         Error
+   end.
+
+
 
 % Reconfigure the replicated object with a new set of replicas
-reconfigure(OldConf, NewPids, NewArgs, Retry) ->
+reconfigure(OldConf, NewPids, NewArgs, Timeout) ->
    #rconf{version = OldVn, pids = OldPids, args = {CMod, OldArgs}} = OldConf,
    % the new configuration
    NewConf = OldConf#rconf{
@@ -76,20 +105,40 @@ reconfigure(OldConf, NewPids, NewArgs, Retry) ->
       pids = NewPids,
       args = {CMod, remake_conf_args(length(NewPids), NewArgs, OldArgs)}
    },
-   % This takes out the replicas in the old configuration but not in the new one
-   libdist_utils:multicall(OldPids, reconfigure, NewConf, Retry),
-   % This integrates the replicas in the new configuration that are not old
-   libdist_utils:multicall(NewPids, reconfigure, NewConf, Retry),
-   NewConf.    % return the new configuration
+   % This takes out replicas in the old configuration but not in the new one
+   Refs = libdist_utils:multicast(OldPids, reconfigure, NewConf),
+   case libdist_utils:collectall(Refs, Timeout) of
+      {ok, _} ->
+         % This integrates replicas in the new configuration that are not old
+         Refs2 = libdist_utils:multicast(NewPids, reconfigure, NewConf),
+         case libdist_utils:collectall(Refs2, Timeout) of
+            {ok, _} ->
+               {ok, NewConf};    % return the new configuration
+            Error ->
+               Error
+         end;
+      Error ->
+         Error
+   end.
+
 
 % Stop one of the replicas of the replicated object.
-stop(Obj=#rconf{version = Vn, pids = OldReplicas}, N, Reason, Retry) ->
+stop(Obj=#rconf{version = Vn, pids = OldReplicas}, N, Reason, Timeout) ->
    Pid = lists:nth(N, OldReplicas),
-   libdist_utils:call(Pid, stop, Reason, Retry),
-   NewReplicas = lists:delete(Pid, OldReplicas),
-   NewConf = Obj#rconf{version = Vn + 1, pids = NewReplicas},
-   libdist_utils:multicall(NewReplicas, reconfigure, NewConf, Retry),
-   NewConf.
+   case libdist_utils:collect(libdist_utils:cast(Pid, stop, Reason), Timeout) of
+      {ok, _} ->
+         NewReplicas = lists:delete(Pid, OldReplicas),
+         NewConf = Obj#rconf{version = Vn + 1, pids = NewReplicas},
+         Refs = libdist_utils:multicast(NewReplicas, reconfigure, NewConf),
+         case libdist_utils:collectall(Refs, Timeout) of
+            {ok, _} ->
+               {ok, NewConf};
+            Error ->
+               Error
+         end;
+      Error ->
+         Error
+   end.
 
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -174,6 +223,13 @@ handle_msg(Me, Message, AllowSideEffects, State = #state{
    end.
 
 
+% Given a list of responses from quorum replicas, return the response that is
+% tagged with the largest number of updates.
+max_response([ Head | Tail ]) ->
+   maxResponse(Head, Tail).
+
+
+
 %%%%%%%%%%%%%%%%%%%%%
 % Private Functions %
 %%%%%%%%%%%%%%%%%%%%%
@@ -181,9 +237,6 @@ handle_msg(Me, Message, AllowSideEffects, State = #state{
 
 % Given a list of responses from quorum replicas, return the response that is
 % tagged with the largest number of updates.
-maxResponse([ Head | Tail ]) ->
-   maxResponse(Head, Tail).
-
 maxResponse({_Count, Response}, []) ->
    Response;
 maxResponse({Count, _Response}, [Head = {Count1, _} | Tail]) when Count1 > Count ->

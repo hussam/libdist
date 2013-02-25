@@ -5,7 +5,8 @@
 -export([
       new/4,
       new_replica/3,
-      do/3,
+      cast/2,
+      call/3,
       reconfigure/4,
       stop/4
    ]).
@@ -40,20 +41,20 @@
    }).
 
 % Create a new primary/backup replicated state machine
-new(CoreSettings = {Module, _}, PBArgs, Nodes, Retry) ->
+new(CoreSettings = {Module, _}, PBArgs, Nodes, Timeout) ->
    % spawn new replicas
    Replicas = [ new_replica(N, CoreSettings, PBArgs) || N <- Nodes ],
    % create a configuration and inform all the replicas of it
    Conf0 = #rconf{protocol = ?MODULE, args = {Module, PBArgs}, version = 0},
-   reconfigure(Conf0, Replicas, [], Retry).   % returns the new configuration
+   reconfigure(Conf0, Replicas, [], Timeout).   % return includes configuration
 
 
 % Start a new replica
 new_replica(Node, CoreSettings, _RepArgs) ->
    server:start(Node, ?MODULE, CoreSettings).
 
-% Send a command to a replicated object
-do(#rconf{pids=Replicas=[Primary | Backups], args={C, Args}}, Command, Retry) ->
+% Send an asynchronous command to a replicated object
+cast(#rconf{pids=Replicas=[Primary | Backups], args={C, Args}}, Command) ->
    Target = case proplists:lookup(read_src, Args) of
       % non-mutating commands go to a random backup
       {_, backup} when Backups /= [] ->
@@ -73,11 +74,16 @@ do(#rconf{pids=Replicas=[Primary | Backups], args={C, Args}}, Command, Retry) ->
       _ ->
          Primary
    end,
-   libdist_utils:call(Target, command, Command, Retry).
+   libdist_utils:cast(Target, command, Command).
+
+
+% Send a synchronous command to a replicated object
+call(Obj, Command, Timeout) ->
+   libdist_utils:collect(cast(Obj, Command), Timeout).
 
 
 % Reconfigure the replicated object with a new set of replicas
-reconfigure(OldConf, NewReplicas, NewArgs, Retry) ->
+reconfigure(OldConf, NewReplicas, NewArgs, Timeout) ->
    #rconf{version = Vn, pids = OldReplicas, args = {Module, _}} = OldConf,
    NewConf = OldConf#rconf{
       version = Vn + 1,
@@ -85,19 +91,39 @@ reconfigure(OldConf, NewReplicas, NewArgs, Retry) ->
       args = {Module, NewArgs}
    },
    % This takes out the replicas in the old configuration but not in the new one
-   libdist_utils:multicall(OldReplicas, reconfigure, NewConf, Retry),
-   % This integrates the replicas in the new configuration that are not old
-   libdist_utils:multicall(NewReplicas, reconfigure, NewConf, Retry),
-   NewConf.    % return the new configuration
+   Refs = libdist_utils:multicast(OldReplicas, reconfigure, NewConf),
+   case libdist_utils:collectall(Refs, Timeout) of
+      {ok, _} ->
+         % This integrates replicas in the new configuration that are not old
+         Refs2 = libdist_utils:multicast(NewReplicas, reconfigure, NewConf),
+         case libdist_utils:collectall(Refs2, Timeout) of
+            {ok, _} ->
+               {ok, NewConf};
+            Error ->
+               Error % TODO
+         end;
+
+      Error ->
+         Error % TODO
+   end.
 
 % Stop one of the replicas of the replicated object.
-stop(Obj=#rconf{version = Vn, pids = OldReplicas}, N, Reason, Retry) ->
+stop(Obj=#rconf{version = Vn, pids = OldReplicas}, N, Reason, Timeout) ->
    Pid = lists:nth(N, OldReplicas),
-   libdist_utils:call(Pid, stop, Reason, Retry),
-   NewReplicas = lists:delete(Pid, OldReplicas),
-   NewConf = Obj#rconf{version = Vn + 1, pids = NewReplicas},
-   libdist_utils:multicall(NewReplicas, reconfigure, NewConf, Retry),
-   NewConf.
+   case libdist_utils:collect(libdist_utils:cast(Pid, stop, Reason), Timeout) of
+      {ok, _} ->
+         NewReplicas = lists:delete(Pid, OldReplicas),
+         NewConf = Obj#rconf{version = Vn + 1, pids = NewReplicas},
+         Refs = libdist_utils:multicast(NewReplicas, reconfigure, NewConf),
+         case libdist_utils:collectall(Refs, Timeout) of
+            {ok, _} ->
+               {ok, NewConf};
+            Error ->
+               Error % TODO
+         end;
+      Error ->
+         Error
+   end.
 
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%
