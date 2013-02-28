@@ -2,6 +2,7 @@
 
 % Async comm
 -export([
+      send/2,
       cast/2,
       collect/2,
       multicast/2,
@@ -20,11 +21,17 @@
 
 % General utility
 -export([
-      ipn/2
+      ipn/2,
+      list_replace/3
    ]).
 
 -include("libdist.hrl").
 
+
+
+%%%%%%%%%%%%%%%%%%%
+% General Utility %
+%%%%%%%%%%%%%%%%%%%
 
 
 % return the {Index, Previous, Next} elements of a chain member
@@ -38,17 +45,39 @@ ipn(Pid, [Prev, Pid], Index) -> {Index + 1, Prev, chain_tail};
 ipn(Pid, [_ | Tail], Index) -> ipn(Pid, Tail, Index + 1).
 
 
+% replace OldElem with NewElem in List
+list_replace(OldElem, NewElem, List) ->
+   case lists:splitwith(fun(I) -> I /= OldElem end, List) of
+      {Preds, [OldElem | Succs]} ->
+         Preds ++ [NewElem | Succs];
+
+      _ ->  % OldElem not in List
+         List
+   end.
+
+
 
 %%%%%%%%%%%%%%%%%%%%%%%
 % Async Communication %
 %%%%%%%%%%%%%%%%%%%%%%%
 
 
-% send an asynchronous request to the given process
+
+% send a message directly to a process, or cast it to a configuration
+send(Conf = #rconf{protocol = P}, Message) ->
+   P:cast(Conf, Message);
+send(Pid, Message) ->
+   Pid ! Message.
+
+% send an asynchronous request to the given destination
 % returns the request's reference
-cast(Pid, Request) ->
+cast(Dst, Request) ->
    Ref = make_ref(),
-   Pid ! {Ref, self(), Request},
+   Msg = {Ref, self(), Request},
+   case Dst of
+      #rconf{protocol = P} -> P:cast(Dst, Msg);
+      _ -> Dst ! Msg
+   end,
    Ref.
 
 
@@ -94,6 +123,8 @@ collectall({Ref, Pids}, Timeout) ->
 
 
 % send synchronous request to a process
+call(Conf = #rconf{protocol = P}, Request, Retry) ->
+   P:call(Conf, Request, Retry);
 call(Pid, Request, Retry) ->
    call(Pid, make_ref(), Request, Retry).
 
@@ -138,6 +169,7 @@ multicall(Pids, Request, NumResponses, Retry) ->
 % send synchronous request to a given Pid
 call(Pid, Ref, Request, RetryAfter) ->
    Pid ! {Ref, self(), Request},
+
    receive
       {Ref, Result} -> Result
    after

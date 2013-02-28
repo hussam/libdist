@@ -1,4 +1,5 @@
 -module(echo).
+-behaviour(ldsm).
 
 % Echo Public API
 -export([
@@ -10,12 +11,14 @@
       stop_replica/3
    ]).
 
-% RepObj Interface Implementation
+% libdist state machine behaviour interface
 -export([
-      new/1,
+      init_sm/1,
       handle_cmd/3,
       is_mutating/1,
-      stop/2
+      stop/2,
+      export/1,
+      import/1
    ]).
 
 
@@ -55,30 +58,27 @@ stop_replica(Obj, N, Reason) ->
 
 
 
-% All the functions below are just implementing the repobj interface
+% All the functions below are just implementing the state machine interface
 
 
 % The new/1 function takes in a bunch of arguments and returns the id of a new
 % local instance of the core. In this case, the arguments contain a tag used by
 % the echo server.
-new(_Args = [Tag]) ->
-   spawn(fun() -> loop(Tag) end).
+init_sm(_Args = [Tag]) ->
+   Tag.
 
-% The handle_cmd/3 function takes in an instance Id, a flag of whether side
-% effects are allowed, and a command and executes the command. The echo server
+% The handle_cmd/3 function takes in a local state, a command, and a flag of
+% whether side effects are allowed, and executes the command. The echo server
 % understands two types of commands, 'set_tag' which modifies the internal state
 % of the server, and 'echo' which is a 'readonly' command that echoes the passed
 % in message. The side effects flag is meaningless here because the echo server
-% does not communicate with the outside world (the instance process's state is
-% part of the state of the state machine)
-handle_cmd(Pid, _, {set_tag, NewTag}) ->
-   Pid ! {self(), set, NewTag},
-   receive Result -> Result end;
-handle_cmd(Pid, _, {echo, Message}) ->
-   Pid ! {self(), echo, Message},
-   receive Result -> Result end;
+% does not communicate with the outside world
+handle_cmd(_OldTag, {set_tag, NewTag}, _) ->
+   {reply, ok, NewTag};
+handle_cmd(Tag, {echo, Message}, _) ->
+   {reply, {Tag, Message}};
 handle_cmd(_, _, _) ->
-   undefined_op.
+   {reply, undefined_op}.
 
 
 % The is_mutating/1 function takes in a command and returns true/false if the
@@ -88,20 +88,22 @@ is_mutating({set_tag, _}) ->
 is_mutating({echo, _}) ->
    false.
 
+
 % The stop/2 function stops the specified instance given the reason passed to it
-% by the repobj. This could be due to reconfiguration or a specific user
+% by the libdist. This could be due to reconfiguration or a specific user
 % request.
-stop(Pid, Reason) ->
-   io:format("Stopping ~p because ~p\n", [Pid, Reason]).
+stop(Tag, Reason) ->
+   io:format("Stopping ~p because ~p\n", [Tag, Reason]).
 
 
+% The export/1 function allows a state machine to cleanly export its local state
+% so that it could later be imported by another state machine. Here, exporting
+% the local state is easy, just return it!
+export(Tag) ->
+   Tag.
 
-% Main loop of the echo server keeping its local state and generating output
-% results
-loop(Tag) ->
-   receive
-      {Pid, get} -> Pid ! Tag, loop(Tag);
-      {Pid, set, NewTag} -> Pid ! {Pid, ok}, loop(NewTag);
-      {Pid, echo, Message} -> Pid ! {Pid, Tag, Message}, loop(Tag)
-   end.
 
+% The import/1 function imports a previous exported state machine state. Here,
+% the local state is just a simple tag value.
+import(Tag) ->
+   Tag.

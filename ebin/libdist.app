@@ -3,7 +3,8 @@
       {description, "A library to build distributed systems"},
       {vsn, "0.2"},
       {modules, [
-         libdist_sm,
+         libdist,
+         ldsm,
          server,
          repobj,
          libdist_utils,

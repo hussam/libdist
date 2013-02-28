@@ -15,8 +15,8 @@
 
 -define(AllowSideEffects, true).
 
-new(Node, CoreModule, CoreArgs) ->
-   server:start(Node, ?MODULE, {CoreModule, CoreArgs}).
+new(Node, SMModule, SMArgs) ->
+   server:start(Node, ?MODULE, {SMModule, SMArgs}).
 
 do(Pid, Command) ->
    libdist_utils:cast(Pid, {command, Command}).
@@ -30,16 +30,16 @@ stop(Pid, Reason) ->
 %%%%%%%%%%%%%%%%%%%%%%
 
 % Initialize the state of the new replica
-init(_Me, {CoreModule, CoreArgs}) ->
-   libdist_sm:new(CoreModule, CoreArgs).
+init(_Me, {SMModule, SMArgs}) ->
+   ldsm:start(SMModule, SMArgs).
 
 
 % Handle a queued message a standalone replica (i.e. no replication)
-handle_msg(Me, Message, Core) ->
+handle_msg(Me, Message, SM) ->
    case Message of
-      % Handle a command for the core
+      % Handle a command for the core state machine
       {Ref, Client, {command, Command}} ->
-         Client ! {Ref, Core:do(?AllowSideEffects, Command)},
+         Client ! {Ref, ldsm:do(SM, Command, ?AllowSideEffects)},
          consume;
 
       % Return the current configuration
@@ -47,10 +47,25 @@ handle_msg(Me, Message, Core) ->
          Client ! {Ref, #rconf{protocol = ?MODULE, pids = [Me]}},
          consume;
 
+      % Return the state machine module
+      {Ref, Client, get_sm_module} ->
+         Client ! {Ref, ldsm:module(SM)},
+         consume;
+
       % Stop this replica
       {Ref, Client, {stop, Reason}} ->
-         Client ! {Ref, Core:stop(Reason)},
+         Client ! {Ref, ldsm:stop(SM, Reason)},
          {stop, Reason};
+
+      {Ref, Client, {replace, Me, Conf}} ->
+         Client ! {Ref, Conf},
+         consume;
+
+      % Return the state machine
+      % TODO: change this into some sort of background state transfer
+      {Ref, Client, get_sm} ->
+         Client ! {Ref, ldsm:export(SM)},
+         consume;
 
       _ ->
          no_match
