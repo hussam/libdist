@@ -65,7 +65,9 @@ stop_replica(Obj, N, Reason) ->
 % local instance of the core. In this case, the arguments contain a tag used by
 % the echo server.
 init_sm(_Args = [Tag]) ->
-   Tag.
+   Tag;
+init_sm([]) ->
+   echo_server.
 
 % The handle_cmd/3 function takes in a local state, a command, and a flag of
 % whether side effects are allowed, and executes the command. The echo server
