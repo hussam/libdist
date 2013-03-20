@@ -86,7 +86,7 @@ update_state(Me, #rconf{pids = NewReps, args = {_, QArgs}}, State) ->
       n = N,
       r = R,
       w = W,
-      others = lists:delete(Me, NewReps)
+      others = shuffle(lists:delete(Me, NewReps))
    }.
 
 
