@@ -1,0 +1,9 @@
+{application, kvs,
+   [
+      {description, "A simple key/value store"},
+      {vsn, "0.1"},
+      {modules, []},
+      {registered, []},
+      {applications, [kernel, stdlib]}
+   ]
+}.

@@ -2,9 +2,7 @@
    [
       {description, "A simple echo server"},
       {vsn, "0.1"},
-      {modules, [
-         echo
-         ]},
+      {modules, []},
       {registered, []},
       {applications, [kernel, stdlib]}
    ]

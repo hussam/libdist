@@ -1,0 +1,2 @@
+A simple Key-Value Store example used to illustrate the use of libdist to build
+distributed failure-tolerant services.
