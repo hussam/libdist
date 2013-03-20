@@ -18,14 +18,21 @@ new_proc(Node, Module, Args) ->
 
 replicate(Pid, Protocol, Args, Nodes) when is_pid(Pid) ->
    % create a replicated state machine in place of the Pid
-   repobj:inherit(Pid, {Protocol, Args}, Nodes, ?TO).
+   {ok, Conf=#rconf{pids = NewReplicas}} = repobj:inherit(
+      Pid, {Protocol, Args}, Nodes, ?TO),
 
-   % the processes in PidConf will have core state machines for all R/P nodes
-   % from Pid to the root of the RP Tree. These state machines will also have
-   % references to the different configurations along the way. So, an
-   % 'integrate/replace' command can be issued to PidConf and the required
-   % reconfiguration commands will percolate all the way to the top of the RP
-   % Tree.
+   % the process Pid has nested state machines for all R/P nodes from Pid to the
+   % root of the RP Tree. These state machines will also have references to the
+   % different configurations along the way. So, an 'replace' command can be
+   % issued to Pid and the required reconfiguration commands will percolate all
+   % the way to the top of the RP Tree.
+
+   % replace the old process with the new conf and get the new root conf
+   NewRootConf = libdist_utils:call(Pid, {replace, Pid, Conf}, ?TO),
+   % let the new replicas inherit the state machine of the old one
+   libdist_utils:multicall(NewReplicas, {inherit_sm, Pid, ?TO}, ?TO),
+   NewRootConf.
+
 
    %NewRootConf = libdist_utils:call(Pid, {replace, Pid, PidConf}, ?TO),
 

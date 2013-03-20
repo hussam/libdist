@@ -21,20 +21,15 @@ new(PSettings={PModule, PArgs}, SMSettings={SMModule, _} , Nodes, Timeout) ->
    reconfigure(#rconf{protocol=PModule, args=SMModule}, Replicas, PArgs, Timeout).
 
 
-% Create a new replicated state machine inheriting the state of an existing process
+% Create a new replicated state machine and prepare it to later inherit the
+% state of an existing process
 inherit(Pid, PSettings={PModule, PArgs}, Nodes, Timeout) ->
    % spawn new replicas
    Replicas = [ replica:new(no_sm, PSettings, N) || N <- Nodes ],
    % get the process's state machine module
    SMModule = libdist_utils:call(Pid, get_sm_module, Timeout),
-   % create a configuration and inform all the replicas of it
-   {ok, Conf} = reconfigure(
-      #rconf{protocol=PModule, args=SMModule}, Replicas, PArgs, Timeout),
-   % replace the old process with the new conf and get the new root conf
-   NewRootConf = libdist_utils:call(Pid, {replace, Pid, Conf}, Timeout),
-   % let the new replicas inherit the state machine of the old one
-   libdist_utils:multicall(Replicas, {inherit_sm, Pid, Timeout}, Timeout),
-   NewRootConf.
+   % create a configuration and inform all the replicas of it and return it
+   reconfigure(#rconf{protocol=PModule, args=SMModule}, Replicas, PArgs, Timeout).
 
 
 % Send an asynchronous command to a replicated object
