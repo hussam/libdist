@@ -9,6 +9,7 @@
          repobj,
          libdist_utils,
          singleton,
+         replica,
          chain,
          primary_backup,
          quorum,

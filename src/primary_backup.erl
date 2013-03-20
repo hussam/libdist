@@ -1,37 +1,21 @@
 -module(primary_backup).
--compile({inline, [handle_msg/4]}).
+-behaviour(replica).
 
-% Repobj interface
+% replica callbacks
 -export([
-      new/4,
-      new_replica/3,
+      make_conf_args/2,
       cast/2,
-      call/3,
-      reconfigure/4,
-      stop/4
-   ]).
-
-% State machine interface
--export([
-      new/1,
-      handle_cmd/3,
-      is_mutating/1,
-      stop/2
-   ]).
-
-% Server callbacks
--export([
-      init/2,
-      handle_msg/3
+      init_replica/1,
+      import/1,
+      export/1,
+      update_state/3,
+      handle_msg/5
    ]).
 
 -include("helper_macros.hrl").
 -include("libdist.hrl").
 
--record(state, {
-      me,
-      core,
-      conf,
+-record(pb_state, {
       role,
       backups = [],
       num_backups = 0,
@@ -40,134 +24,82 @@
       next_cmd_num = 0
    }).
 
-% Create a new primary/backup replicated state machine
-new(CoreSettings = {Module, _}, PBArgs, Nodes, Timeout) ->
-   % spawn new replicas
-   Replicas = [ new_replica(N, CoreSettings, PBArgs) || N <- Nodes ],
-   % create a configuration and inform all the replicas of it
-   Conf0 = #rconf{protocol = ?MODULE, args = {Module, PBArgs}, version = 0},
-   reconfigure(Conf0, Replicas, [], Timeout).   % return includes configuration
 
 
-% Start a new replica
-new_replica(Node, CoreSettings, _RepArgs) ->
-   server:start(Node, ?MODULE, CoreSettings).
+%%%%%%%%%%%%%%%%%%%%%
+% Replica Callbacks %
+%%%%%%%%%%%%%%%%%%%%%
+
+
+% Create the arguments added to #rconf{} for this protocol
+make_conf_args({SMModule, _OldArgs}, NewArgs) -> {SMModule, NewArgs};
+make_conf_args(SMModule, Args) -> {SMModule, Args}.
+
 
 % Send an asynchronous command to a replicated object
-cast(#rconf{pids=Replicas=[Primary | Backups], args={C, Args}}, Command) ->
-   Target = case proplists:lookup(read_src, Args) of
-      % non-mutating commands go to a random backup
-      {_, backup} when Backups /= [] ->
-         case C:is_mutating(Command) of
-            true -> Primary;
-            false -> lists:nth( random:uniform(length(Backups)) , Backups )
-         end;
-
-      % non-mutating commands go to a random replica
-      {_, random} ->
-         case C:is_mutating(Command) of
-            true -> Primary;
-            false -> lists:nth( random:uniform(length(Replicas)) , Replicas )
-         end;
-
-      % either a mutating command, or all commands go to primary
-      _ ->
-         Primary
+cast(#rconf{pids=Replicas=[Primary | Backups], args={SMModule, Args}}, Command) ->
+   {Target, Tag} = case SMModule:is_mutating(Command) of
+      true ->
+         {Primary, write};
+      false ->
+         case proplists:lookup(read_src, Args) of
+            % non-mutating commands go to a random backup
+            {_, backup} when Backups /= [] ->
+               {lists:nth( random:uniform(length(Backups)) , Backups ), read};
+            % non-mutating commands go to a random replica
+            {_, random} ->
+               {lists:nth( random:uniform(length(Replicas)) , Replicas ), read};
+            % all commands go to primary
+            _ ->
+               {Primary, read}
+         end
    end,
-   libdist_utils:cast(Target, {command, Command}).
-
-
-% Send a synchronous command to a replicated object
-call(Obj, Command, Timeout) ->
-   libdist_utils:collect(cast(Obj, Command), Timeout).
-
-
-% Reconfigure the replicated object with a new set of replicas
-reconfigure(OldConf, NewReplicas, NewArgs, Timeout) ->
-   #rconf{version = Vn, pids = OldReplicas, args = {Module, _}} = OldConf,
-   NewConf = OldConf#rconf{
-      version = Vn + 1,
-      pids = NewReplicas,
-      args = {Module, NewArgs}
-   },
-   % This takes out the replicas in the old configuration but not in the new one
-   Refs = libdist_utils:multicast(OldReplicas, {reconfigure, NewConf}),
-   case libdist_utils:collectall(Refs, Timeout) of
-      {ok, _} ->
-         % This integrates replicas in the new configuration that are not old
-         Refs2 = libdist_utils:multicast(NewReplicas, {reconfigure, NewConf}),
-         case libdist_utils:collectall(Refs2, Timeout) of
-            {ok, _} ->
-               {ok, NewConf};
-            Error ->
-               Error % TODO
-         end;
-
-      Error ->
-         Error % TODO
-   end.
-
-% Stop one of the replicas of the replicated object.
-stop(Obj=#rconf{version = Vn, pids = OldReplicas}, N, Reason, Timeout) ->
-   Pid = lists:nth(N, OldReplicas),
-   case libdist_utils:collect(libdist_utils:cast(Pid, {stop, Reason}), Timeout) of
-      {ok, _} ->
-         NewReplicas = lists:delete(Pid, OldReplicas),
-         NewConf = Obj#rconf{version = Vn + 1, pids = NewReplicas},
-         Refs = libdist_utils:multicast(NewReplicas, {reconfigure, NewConf}),
-         case libdist_utils:collectall(Refs, Timeout) of
-            {ok, _} ->
-               {ok, NewConf};
-            Error ->
-               Error % TODO
-         end;
-      Error ->
-         Error
-   end.
-
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%
-% State Machine Callbacks %
-%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-
-new({CoreModule, CoreArgs}) ->
-   init([], {CoreModule, CoreArgs}).
-
-handle_cmd(State = #state{me = Me}, AllowSideEffects, Message) ->
-   handle_msg(Me, Message, AllowSideEffects, State).
-
-is_mutating(_) ->
-   true.
-
-stop(#state{core = Core}, Reason) ->
-   Core:stop(Reason).
-
-
-%%%%%%%%%%%%%%%%%%%%
-% Server Callbacks %
-%%%%%%%%%%%%%%%%%%%%
+   libdist_utils:cast(Target, {Tag, Command}).
 
 
 % Initialize the state of a new replica
-init(Me, {CoreModule, CoreArgs}) ->
-   #state{
-      me = Me,
-      core = libdist_sm:new(CoreModule, CoreArgs),
-      conf = #rconf{protocol = ?MODULE},
+init_replica(_Me) ->
+   #pb_state{
       unstable = ets:new(unstable_commands, [])
    }.
 
 
-% Handle a queued message
-handle_msg(Me, Message, State) ->
-   handle_msg(Me, Message, true, State).
+% Import a previously exported primary-backup state
+import(ExportedState = #pb_state{unstable = UnstableList}) ->
+   Unstable = ets:new(unstable_commands, []),
+   ets:insert(Unstable, UnstableList),
+   ExportedState#pb_state{
+      unstable = Unstable
+   }.
+
+
+% Export a primary-backup replica state
+export(State = #pb_state{unstable = Unstable}) ->
+   State#pb_state{
+      unstable = ets:tab2list(Unstable)
+   }.
+
+
+% Update the protocol's custom state (due to replacement or reconfiguration)
+update_state(Me, #rconf{pids = [Head | Tail]}, State) ->
+   case Head == Me of
+      true ->
+         State#pb_state{
+            role = primary,
+            backups = Tail,
+            num_backups = length(Tail)
+         };
+      false ->
+         State#pb_state{
+            role = backup,
+            backups = [],
+            num_backups = 0
+         }
+   end.
 
 
 % Handle a queued message
-handle_msg(Me, Message, AllowSideEffects, State = #state{
-      core = Core,
-      conf = Conf,
+handle_msg(Me, Message, ASE = _AllowSideEffects, SM, State = #pb_state{
       role = Role,
       backups = Backups, num_backups = NumBackups,
       unstable = Unstable,
@@ -176,82 +108,41 @@ handle_msg(Me, Message, AllowSideEffects, State = #state{
    }) ->
    case Message of
       % Handle command as a primary replica
-      {Ref, Client, {command, Command}} when Role == primary ->
-         case Core:is_mutating(Command) of
-            true ->
-               ets:insert(Unstable, {
-                     NextCmdNum,
-                     NumBackups,
-                     Ref,
-                     Client,
-                     Command
-                  }),
-               libdist_utils:multicast(Backups, {command, NextCmdNum, Command}),
-               {consume, State#state{next_cmd_num = NextCmdNum + 1}};
-            false ->
-               ?ECS({Ref, Core:do(AllowSideEffects, Command)}, AllowSideEffects, Client),
-               consume
-         end;
+      {Ref, Client, {write, Command}} when Role == primary ->
+         ets:insert(Unstable, {
+               NextCmdNum,
+               NumBackups,
+               Ref,
+               Client,
+               Command
+            }),
+         Msg = {Ref, Me, write, NextCmdNum, Command},
+         [ ?SEND(B, Msg, ASE) || B <- Backups ],
+         {consume, State#pb_state{next_cmd_num = NextCmdNum + 1}};
 
       % Handle command as a backup replica
-      {_Ref, Primary, {command, NextCmdNum, Command}} ->
-         Core:do(AllowSideEffects, Command),
-         Primary ! {stabilized, StableCount},
+      {_Ref, Primary, write, NextCmdNum, Command} ->
+         ldsm:do(SM, Command, false),
+         ?SEND(Primary, {stabilized, StableCount}, ASE),
          NewCount = StableCount + 1,
-         {consume, State#state{stable_count=NewCount, next_cmd_num=NewCount}};
+         {consume, State#pb_state{stable_count=NewCount, next_cmd_num=NewCount}};
 
-      % Handle query command as a backup replica
-      {Ref, Client, {command, Command}} ->
-         ?ECS({Ref, Core:do(AllowSideEffects, Command)}, AllowSideEffects, Client),
+      % Handle query read-only command
+      {Ref, Client, {read, Command}} ->
+         ldsm:do(SM, Ref, Client, Command, ASE),
          consume;
 
       {stabilized, StableCount} ->
          NewStableCount = case ets:update_counter(Unstable, StableCount, -1) of
             0 ->
                [{_, 0, Ref, Client, Cmd}] = ets:lookup(Unstable, StableCount),
-               ?ECS({Ref, Core:do(AllowSideEffects, Cmd)}, AllowSideEffects, Client),
+               ldsm:do(SM, Ref, Client, Cmd, ASE),
                ets:delete(Unstable, StableCount),
                StableCount + 1;
             _ ->
                StableCount
          end,
-         {consume, State#state{stable_count = NewStableCount}};
-
-      % Change this replica's configuration
-      % TODO: handle reconfiguration in nested protocols
-      {Ref, Client, {reconfigure, NewConf=#rconf{pids=[Head | Tail]}}} ->
-         ?ECS({Ref, ok}, AllowSideEffects, Client),
-         if
-            Head == Me ->
-               {consume, State#state{
-                     conf = NewConf,
-                     role = primary,
-                     backups = Tail,
-                     num_backups = length(Tail)
-                  }};
-            true ->
-               case lists:member(Me, Tail) of
-                  true ->
-                     {consume, State#state{
-                           conf = NewConf,
-                           role = backup,
-                           backups = [],
-                           num_backups = 0
-                        }};
-                  false ->
-                     Core:stop(reconfigure),
-                     {stop, reconfigure}
-               end
-         end;
-
-      {Ref, Client, get_conf} ->
-         ?ECS({Ref, Conf}, AllowSideEffects, Client),
-         consume;
-
-      % Stop this replica
-      {Ref, Client, {stop, Reason}} ->
-         ?ECS({Ref, Core:stop(Reason)}, AllowSideEffects, Client),
-         {stop, Reason};
+         {consume, State#pb_state{stable_count = NewStableCount}};
 
       _ ->
          no_match

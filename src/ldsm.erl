@@ -7,6 +7,7 @@
 -export([
       start/2,
       do/3,
+      do/5,
       is_mutating/2,
       stop/2
    ]).
@@ -20,6 +21,8 @@
       export/2,
       import/1
    ]).
+
+-include("helper_macros.hrl").
 
 
 % Define behaviour callbacks
@@ -48,6 +51,9 @@ is_mutating({_, Module, _}, Command) ->
 do(SMC, Command, AllowSideEffects) ->
    call(SMC, do, Command, AllowSideEffects).
 
+do(SMC, Ref, Client, Command, AllowSideEffects) ->
+   call(SMC, do, Ref, Client, Command, AllowSideEffects).
+
 stop(SMC, Reason) ->
    call(SMC, stop, Reason).
 
@@ -72,9 +78,7 @@ import({Module, ExportedState}) ->
 
 
 % is the passed in state machine a libdist replication or partitioning protocol?
-is_rp_protocol({_, chain, _}) -> true;
-is_rp_protocol({_, primary_backup, _}) -> true;
-is_rp_protocol({_, quorum, _}) -> true;
+is_rp_protocol({_, replica, _}) -> true;
 is_rp_protocol(_) -> false.
 
 
@@ -85,41 +89,62 @@ is_rp_protocol(_) -> false.
 
 loop(Module, State) ->
    receive
-      {SMC = {_, _, Client}, do, Command, AllowSideEffects} ->
+      {SMC = {_, _, C}, do, Ref, Client, Command, AllowSideEffects} ->
          case Module:handle_cmd(State, Command, AllowSideEffects) of
             {reply, Reply} ->
-               Client ! {SMC, Reply},
+               ?SEND(Client, {Ref, Reply}, AllowSideEffects),
+               C ! {SMC, done},
                loop(Module, State);
 
             {reply, Reply, NewState} ->
-               Client ! {SMC, Reply},
+               ?SEND(Client, {Ref, Reply}, AllowSideEffects),
+               C ! {SMC, done},
                loop(Module, NewState);
 
             {noreply, NewState} ->
-               Client ! {SMC, ok},
+               C ! {SMC, done},
                loop(Module, NewState);
 
             noreply ->
-               Client ! {SMC, ok},
+               C ! {SMC, done},
                loop(Module, State)
          end;
 
-      {SMC = {_, _, Client}, stop, Reason} ->
-         Module:stop(State, Reason),
-         Client ! {SMC, ok};
+      {SMC = {_, _, C}, do, Command, AllowSideEffects} ->
+         case Module:handle_cmd(State, Command, AllowSideEffects) of
+            {reply, Reply} ->
+               C ! {SMC, Reply},
+               loop(Module, State);
 
-      {SMC = {_, _, Client}, export} ->
-         Client ! {SMC, Module:export(State)},
+            {reply, Reply, NewState} ->
+               C ! {SMC, Reply},
+               loop(Module, NewState);
+
+            {noreply, NewState} ->
+               C ! {SMC, done},
+               loop(Module, NewState);
+
+            noreply ->
+               C ! {SMC, done},
+               loop(Module, State)
+         end;
+
+      {SMC = {_, _, C}, stop, Reason} ->
+         Module:stop(State, Reason),
+         C ! {SMC, ok};
+
+      {SMC = {_, _, C}, export} ->
+         C ! {SMC, Module:export(State)},
          loop(Module, State);
 
-      {SMC = {_, _, Client}, get_state} ->
-         Client ! {SMC, State},
+      {SMC = {_, _, C}, get_state} ->
+         C ! {SMC, State},
          loop(Module, State)
    end.
 
 
-% make a call to the SM server with 0,1,2 arguments
--compile({inline, [call/2, call/3, call/4]}).
+% make a call to the SM server with 0,1,2,4 arguments
+-compile({inline, [call/2, call/3, call/4, call/6]}).
 
 call(SMC = {SM, _, _}, Tag) ->
    SM ! {SMC, Tag},
@@ -139,4 +164,8 @@ call(SMC = {SM, _, _}, Tag, Arg1, Arg2) ->
       {SMC, Result} -> Result
    end.
 
-
+call(SMC = {SM, _, _}, Tag, Arg1, Arg2, Arg3, Arg4) ->
+   SM ! {SMC, Tag, Arg1, Arg2, Arg3, Arg4},
+   receive
+      {SMC, Result} -> Result
+   end.
