@@ -3,7 +3,8 @@
 
 % replica callbacks
 -export([
-      make_conf_args/2,
+      type/0,
+      conf_args/1,
       cast/2,
       init_replica/1,
       import/1,
@@ -12,6 +13,7 @@
       handle_msg/5
    ]).
 
+-include("constants.hrl").
 -include("helper_macros.hrl").
 -include("libdist.hrl").
 
@@ -30,28 +32,27 @@
 % Replica Callbacks %
 %%%%%%%%%%%%%%%%%%%%%
 
-
-% Create the arguments added to #rconf{} for this protocol
-make_conf_args({SMModule, _OldArgs}, NewArgs) -> {SMModule, NewArgs};
-make_conf_args(SMModule, Args) -> {SMModule, Args}.
+% This is a partitioning protocol and it does not require processing of extra arguments
+type() -> ?REPL.
+conf_args(Args) -> Args.
 
 
 % Send an asynchronous command to a replicated object
-cast(#rconf{pids=Replicas=[Primary | Backups], args={SMModule, Args}}, Command) ->
+cast(#conf{replicas=Replicas=[P | Bs], sm_mod=SMModule, args=Args}, Command) ->
    {Target, Tag} = case SMModule:is_mutating(Command) of
       true ->
-         {Primary, write};
+         {P, write};
       false ->
          case proplists:lookup(read_src, Args) of
             % non-mutating commands go to a random backup
-            {_, backup} when Backups /= [] ->
-               {lists:nth( random:uniform(length(Backups)) , Backups ), read};
+            {_, backup} when Bs /= [] ->
+               {lists:nth( random:uniform(length(Bs)) , Bs ), read};
             % non-mutating commands go to a random replica
             {_, random} ->
                {lists:nth( random:uniform(length(Replicas)) , Replicas ), read};
-            % all commands go to primary
+            % all commands go to P
             _ ->
-               {Primary, read}
+               {P, read}
          end
    end,
    libdist_utils:cast(Target, {Tag, Command}).
@@ -81,7 +82,7 @@ export(State = #pb_state{unstable = Unstable}) ->
 
 
 % Update the protocol's custom state (due to replacement or reconfiguration)
-update_state(Me, #rconf{pids = [Head | Tail]}, State) ->
+update_state(Me, #conf{replicas = [Head | Tail]}, State) ->
    case Head == Me of
       true ->
          State#pb_state{

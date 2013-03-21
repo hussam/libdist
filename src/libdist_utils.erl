@@ -64,7 +64,7 @@ list_replace(OldElem, NewElem, List) ->
 
 
 % send a message directly to a process, or cast it to a configuration
-send(Conf = #rconf{protocol = P}, Message) ->
+send(Conf = #conf{protocol = P}, Message) ->
    P:cast(Conf, Message);
 send(Pid, Message) ->
    Pid ! Message.
@@ -75,7 +75,7 @@ cast(Dst, Request) ->
    Ref = make_ref(),
    Msg = {Ref, self(), Request},
    case Dst of
-      #rconf{protocol = P} -> P:cast(Dst, Msg);
+      #conf{protocol = P} -> P:cast(Dst, Msg);
       _ -> Dst ! Msg
    end,
    Ref.
@@ -123,7 +123,7 @@ collectall({Ref, Pids}, Timeout) ->
 
 
 % send synchronous request to a process
-call(Conf = #rconf{protocol = P}, Request, Retry) ->
+call(Conf = #conf{protocol = P}, Request, Retry) ->
    P:call(Conf, Request, Retry);
 call(Pid, Request, Retry) ->
    call(Pid, make_ref(), Request, Retry).

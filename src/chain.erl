@@ -3,7 +3,8 @@
 
 % replica callbacks
 -export([
-      make_conf_args/2,
+      type/0,
+      conf_args/1,
       cast/2,
       init_replica/1,
       import/1,
@@ -12,6 +13,7 @@
       handle_msg/5
    ]).
 
+-include("constants.hrl").
 -include("helper_macros.hrl").
 -include("libdist.hrl").
 
@@ -30,15 +32,16 @@
 %%%%%%%%%%%%%%%%%%%%%
 
 
-% Create the arguments added to #rconf{} for this protocol
-make_conf_args(SMModule, _) -> SMModule.
+% This is a partitioning protocol and it does not make use of extra arguments
+type() -> ?REPL.
+conf_args(Args) -> Args.
 
 
 % Send an asynchronous command to a chain replicated object
-cast(#rconf{pids = Pids = [Head | _], args = SMModule}, Command) ->
+cast(#conf{replicas = Reps = [Head | _], sm_mod = SMModule}, Command) ->
    Target = case SMModule:is_mutating(Command) of
       true -> Head;
-      false -> lists:last(Pids)
+      false -> lists:last(Reps)
    end,
    libdist_utils:cast(Target, {command, Command}).
 
@@ -67,7 +70,7 @@ export(State = #chain_state{unstable = Unstable}) ->
 
 
 % Update the protocol's custom state (due to replacement or reconfiguration)
-update_state(Me, #rconf{pids = NewReps}, State) ->
+update_state(Me, #conf{replicas = NewReps}, State) ->
    {_, NewPrev, NewNext} = libdist_utils:ipn(Me, NewReps),
    State#chain_state{
       next = NewNext,
@@ -109,21 +112,14 @@ handle_msg(_Me, Message, ASE = _AllowSideEffects, SM, State = #chain_state{
          consume;
 
       {stabilized, StableCount} = Msg ->
-         case ets:lookup(Unstable, StableCount) of
-            [{StableCount, _Ref, _Client, Command}] ->
-               ldsm:do(SM, Command, false),
-               if
-                  Prev /= chain_head -> ?SEND(Prev, Msg, ASE);
-                  true -> do_not_forward
-               end,
-               ets:delete(Unstable, StableCount),
-               {consume, State#chain_state{stable_count=StableCount+1}};
-
-            Other ->
-               io:format("Unexpected result when stabilizing at chain replica:
-                  ~p\n", [Other]),
-               exit(error_stabilizing_at_chain_node)
-         end;
+         [{StableCount, _, _, Command}] = ets:lookup(Unstable, StableCount),
+         ldsm:do(SM, Command, false),
+         if
+            Prev /= chain_head -> ?SEND(Prev, Msg, ASE);
+            true -> do_not_forward
+         end,
+         ets:delete(Unstable, StableCount),
+         {consume, State#chain_state{stable_count=StableCount+1}};
 
       _ ->
          no_match

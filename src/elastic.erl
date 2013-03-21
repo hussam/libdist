@@ -34,10 +34,10 @@ new(CoreSettings = {CoreModule, _}, ElasticArgs, Nodes, Retry) ->
    % spawn new replicas
    Replicas = [ new_replica(N , CoreSettings, ElasticArgs) || N <- Nodes ],
 
-   Conf = set_conf_args([{core_module, CoreModule} | ElasticArgs], #rconf{
+   Conf = set_conf_args([{core_module, CoreModule} | ElasticArgs], #conf{
          protocol = ?MODULE,
          version = 1,
-         pids = Replicas
+         replicas = Replicas
       }),
 
    % activate and return the new configuration
@@ -54,7 +54,7 @@ cast(_Conf, _Command) ->
    {error, not_valid_for_this_protocol}.
 
 % Send a command to a replicated object
-call(#rconf{pids=[Orderer | _], version=Vn, args=Args}, Command, Retry) ->
+call(#conf{replicas=[Orderer | _], version=Vn, args=Args}, Command, Retry) ->
    CoreModule = proplists:get_value(cmod, Args),
    CommandType = case CoreModule:is_mutating(Command) of
       false -> read;
@@ -65,9 +65,9 @@ call(#rconf{pids=[Orderer | _], version=Vn, args=Args}, Command, Retry) ->
 
 % Reconfigure the replicated object with a new set of replicas
 reconfigure(OldConf, NewReplicas, NewArgs, Retry) ->
-   #rconf{version = Vn, pids = OldReplicas, args = OldArgs} = OldConf,
+   #conf{version = Vn, replicas = OldReplicas, args = OldArgs} = OldConf,
    NewConfArgs = [{core_module, proplists:get_value(cmod, OldArgs)} | NewArgs],
-   NewConf = set_conf_args(NewConfArgs, OldConf#rconf{version=Vn+1, pids=NewReplicas}),
+   NewConf = set_conf_args(NewConfArgs, OldConf#conf{version=Vn+1, replicas=NewReplicas}),
 
    % wedge the old configuration by wedging any of its replicas
    libdist_utils:anycall(OldReplicas, {wedge, Vn}, Retry),
@@ -85,7 +85,7 @@ reconfigure(OldConf, NewReplicas, NewArgs, Retry) ->
             case libdist_utils:call(Pid, ping, Retry) of
                pending ->
                   {[Pid | Pending], Wedged};
-               {wedged, #rconf{version = Vn}} ->
+               {wedged, #conf{version = Vn}} ->
                   {Pending, [Pid | Wedged]}
             end
       end,
@@ -100,22 +100,22 @@ reconfigure(OldConf, NewReplicas, NewArgs, Retry) ->
 
 
 % Stop one of the replicas of the replicated object.
-stop(Obj=#rconf{version = Vn, pids = OldReplicas}, N, Reason, Retry) ->
+stop(Obj=#conf{version = Vn, replicas = OldReplicas}, N, Reason, Retry) ->
    libdist_utils:multicall(OldReplicas, {wedge, Vn}, Retry),    % wedge all replicas
    Pid = lists:nth(N, OldReplicas),
    libdist_utils:call(Pid, {stop, Reason}, Retry),
    NewReplicas = lists:delete(Pid, OldReplicas),
-   NewConf = Obj#rconf{version = Vn + 1, pids = NewReplicas},
+   NewConf = Obj#conf{version = Vn + 1, replicas = NewReplicas},
    libdist_utils:multicall(NewReplicas, {update_conf, Vn, NewConf}, Retry),
    NewConf.
 
 
 % Wedge a configuration
-wedge(#rconf{version = Vn, pids = Pids}, Retry) ->
-   libdist_utils:anycall(Pids, {wedge, Vn}, Retry).
+wedge(#conf{version = Vn, replicas = Replicas}, Retry) ->
+   libdist_utils:anycall(Replicas , {wedge, Vn}, Retry).
 
 % Wedge a particular replica in a configuration
-wedge(#rconf{version = Vn, pids = Pids}, N, Retry) ->
+wedge(#conf{version = Vn, replicas = Pids}, N, Retry) ->
    Pid = lists:nth(N, Pids),
    libdist_utils:call(Pid, {wedge, Vn}, Retry).
 
@@ -142,7 +142,7 @@ makeImmutable(Core, Conf, Unstable, StableCount, NextCmdNum) ->
 handle_msg(Me, Message, {pending, CoreModule, CoreArgs}) ->
    case Message of
       % activate a configuration for a 'fresh' replicated object
-      {Ref, Client, {activate, Conf=#rconf{version=1, pids=Pids, args=ConfArgs}}} ->
+      {Ref, Client, {activate, Conf=#conf{version=1, replicas=Pids, args=ConfArgs}}} ->
          case lists:member(Me, Pids) of
             true ->
                Core = libdist_sm:new(CoreModule, CoreArgs),
@@ -156,8 +156,8 @@ handle_msg(Me, Message, {pending, CoreModule, CoreArgs}) ->
          end;
 
       % activate a configuration and inherit the state from a prior config
-      {Ref, Client, {inherit, {_OldConf=#rconf{version = Vn, pids = OldPids},
-                               NewConf=#rconf{version = Vn2, pids = NewPids, args=NewConfArgs},
+      {Ref, Client, {inherit, {_OldConf=#conf{version = Vn, replicas = OldPids},
+                               NewConf=#conf{version = Vn2, replicas = NewPids, args=NewConfArgs},
                                Retry}} } when Vn2 == Vn+1 ->
          case lists:member(Me, NewPids) of
             true ->
@@ -191,12 +191,12 @@ handle_msg(Me, Message, {pending, CoreModule, CoreArgs}) ->
 % The only things it can do is pass down its history (stable + unstable) to a
 % caller, or upgrade to a successor configuration.
 handle_msg(Me, Message, {immutable,
-      Core, Conf=#rconf{version=Vn}, Unstable, StableCount, NextCmdNum}) ->
+      Core, Conf=#conf{version=Vn}, Unstable, StableCount, NextCmdNum}) ->
    case Message of
       % For practical considerations, a replica can inherit its history from a
       % prior configuration (i.e. upgrade its configuration).
-      {Ref, Client, {update_conf, Vn, NewConf=#rconf{
-               version = Vn2, pids = Pids, args = NewConfArgs}} } when Vn2 == Vn+1->
+      {Ref, Client, {update_conf, Vn, NewConf=#conf{
+               version = Vn2, replicas = Pids, args = NewConfArgs}} } when Vn2 == Vn+1->
          case lists:member(Me, Pids) of
             true ->
                Client ! {Ref, ok},
@@ -252,5 +252,5 @@ set_conf_args(Args, Conf) ->
    end,
 
    ConfArgs = [{cmod, CoreModule} , {emod, ElasticModule}],
-   Conf#rconf{args = ConfArgs}.
+   Conf#conf{args = ConfArgs}.
 

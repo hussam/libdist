@@ -1,72 +1,47 @@
 -module(singleton).
+-behaviour(replica).
+
+% replica callbacks
 -export([
-      new/3,
-      do/2,
-      stop/2
+      type/0,
+      conf_args/1,
+      cast/2,
+      init_replica/1,
+      import/1,
+      export/1,
+      update_state/3,
+      handle_msg/5
    ]).
 
-% Server callbacks
--export([
-      init/2,
-      handle_msg/3
-   ]).
-
+-include("constants.hrl").
 -include("libdist.hrl").
 
--define(AllowSideEffects, true).
 
-new(Node, SMModule, SMArgs) ->
-   server:start(Node, ?MODULE, {SMModule, SMArgs}).
+%%%%%%%%%%%%%%%%%%%%%
+% Replica Callbacks %
+%%%%%%%%%%%%%%%%%%%%%
 
-do(Pid, Command) ->
+
+type() -> ?SINGLE.
+conf_args(Args) -> Args.
+
+% Send an asynchronous command to a singleton configuration
+cast(#conf{replicas = [Pid]}, Command) ->
    libdist_utils:cast(Pid, {command, Command}).
 
-stop(Pid, Reason) ->
-   libdist_utils:cast(Pid, {stop, Reason}).
+% There is no singleton-specific state, so all these functions are meaningless
+init_replica(_) -> [].
+import(_) -> [].
+export(_) -> [].
+update_state(_,_,_) -> [].
 
-
-%%%%%%%%%%%%%%%%%%%%%%
-% Callback Functions %
-%%%%%%%%%%%%%%%%%%%%%%
-
-% Initialize the state of the new replica
-init(_Me, {SMModule, SMArgs}) ->
-   ldsm:start(SMModule, SMArgs).
-
-
-% Handle a queued message a standalone replica (i.e. no replication)
-handle_msg(Me, Message, SM) ->
+% Handle a queued message
+handle_msg(_Me, Message, ASE = _AllowSideEffects, SM, _State) ->
    case Message of
       % Handle a command for the core state machine
       {Ref, Client, {command, Command}} ->
-         Client ! {Ref, ldsm:do(SM, Command, ?AllowSideEffects)},
+         ldsm:do(SM, Ref, Client, Command, ASE),
          consume;
-
-      % Return the current configuration
-      {Ref, Client, get_conf} ->
-         Client ! {Ref, #rconf{protocol = ?MODULE, pids = [Me]}},
-         consume;
-
-      % Return the state machine module
-      {Ref, Client, get_sm_module} ->
-         Client ! {Ref, ldsm:module(SM)},
-         consume;
-
-      % Stop this replica
-      {Ref, Client, {stop, Reason}} ->
-         Client ! {Ref, ldsm:stop(SM, Reason)},
-         {stop, Reason};
-
-      {Ref, Client, {replace, Me, Conf}} ->
-         Client ! {Ref, Conf},
-         consume;
-
-      % Return the state machine
-      % TODO: change this into some sort of background state transfer
-      {Ref, Client, get_sm} ->
-         Client ! {Ref, ldsm:export(SM)},
-         consume;
-
       _ ->
          no_match
    end.

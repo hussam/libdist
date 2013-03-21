@@ -1,0 +1,3 @@
+-define(SINGLE, singleton).
+-define(REPL, rsm).
+-define(PART, psm).

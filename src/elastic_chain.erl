@@ -25,7 +25,7 @@
 
 
 % Set/return the state of an active/non-immutable replica
-activate(Me, Core, Conf=#rconf{pids = Replicas}, Unstable, StableCount, NextCmdNum) ->
+activate(Me, Core, Conf=#conf{replicas = Replicas}, Unstable, StableCount, NextCmdNum) ->
    {_Index, Prev, Next} = libdist_utils:ipn(Me, Replicas),
    #state{
       core = Core,
@@ -49,7 +49,7 @@ init(_, _) ->
 % respond to client requests. A replica stays in active state until it is wedged
 handle_msg(_Me, Message, State = #state{
             core = Core,
-            conf = Conf = #rconf{version = Vn},
+            conf = Conf = #conf{version = Vn},
             prev = Prev,
             next = Next,
             unstable = Unstable,

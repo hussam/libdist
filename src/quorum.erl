@@ -3,7 +3,8 @@
 
 % Replica callbacks
 -export([
-      make_conf_args/2,
+      type/0,
+      conf_args/1,
       cast/2,
       init_replica/1,
       import/1,
@@ -12,6 +13,7 @@
       handle_msg/5
    ]).
 
+-include("constants.hrl").
 -include("helper_macros.hrl").
 -include("libdist.hrl").
 
@@ -30,18 +32,18 @@
 %%%%%%%%%%%%%%%%%%%%%
 
 
-% Create the arguments added to #rconf{} for this protocol
-make_conf_args({SMModule, _}, NewArgs) -> {SMModule, NewArgs};
-make_conf_args(SMModule, Args) -> {SMModule, Args}.
+% This is a partitioning protocol and it does not require processing of extra arguments
+type() -> ?REPL.
+conf_args(Args) -> Args.
 
 
 % Send an asynchronous command to a replicated object
-cast(#rconf{pids = Replicas = [Hd | _], args = {SMModule, QArgs}}, Command) ->
+cast(#conf{replicas=Replicas=[Hd | _], sm_mod = SMMod, args = QArgs}, Command) ->
    Target = case proplists:get_bool(shuffle, QArgs) of
       true -> lists:nth(random:uniform(lists:length(Replicas)), Replicas);
       false -> Hd
    end,
-   QName = case SMModule:is_mutating(Command) of
+   QName = case SMMod:is_mutating(Command) of
       true -> w;
       false -> r
    end,
@@ -72,7 +74,7 @@ export(State = #quorum_state{unstable = Unstable}) ->
 
 
 % Update the protocol's custom state (due to replacement or reconfiguration)
-update_state(Me, #rconf{pids = NewReps, args = {_, QArgs}}, State) ->
+update_state(Me, #conf{replicas = NewReps, args = QArgs}, State) ->
    N = length(NewReps),
    R = case proplists:lookup(r, QArgs) of
       {r, ReadQuorumSize} -> ReadQuorumSize;
