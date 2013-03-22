@@ -2,8 +2,9 @@
 
 % Async comm
 -export([
-      send/2,
+      send/3,
       cast/2,
+      cast/3,
       collect/2,
       multicast/2,
       collectany/2,
@@ -14,6 +15,7 @@
 % Sync comm
 -export([
       call/3,
+      call/4,
       anycall/3,
       multicall/3,
       multicall/4
@@ -22,9 +24,11 @@
 % General utility
 -export([
       ipn/2,
-      list_replace/3
+      list_replace/3,
+      is_next_cmd/2
    ]).
 
+-include("constants.hrl").
 -include("libdist.hrl").
 
 
@@ -56,6 +60,16 @@ list_replace(OldElem, NewElem, List) ->
    end.
 
 
+% checks whether the given tagged command number is what is expected for the tag
+is_next_cmd({Tags, Num}, CmdNums) ->
+   case dict:find(Tags, CmdNums) of
+      {ok, Num} ->            % expecting this number with these tags
+         {true, dict:store(Tags, Num+1, CmdNums)};
+      error ->                % first command from newly partitioned replica
+         {true, dict:store(Tags, Num+1, CmdNums)};
+      {ok, _} ->              % tags found, but incorrect command number
+         false
+   end.
 
 %%%%%%%%%%%%%%%%%%%%%%%
 % Async Communication %
@@ -63,19 +77,24 @@ list_replace(OldElem, NewElem, List) ->
 
 
 
-% send a message directly to a process, or cast it to a configuration
-send(Conf = #conf{protocol = P}, Message) ->
-   P:cast(Conf, Message);
-send(Pid, Message) ->
+% send a message directly to a process, or a configuration
+% Used for INTRA-protocol/domain communication
+send(Conf = #conf{protocol = P}, RoutingId, Message) ->
+   P:cast(Conf, RoutingId, Message);
+send(Pid, _, Message) ->
    Pid ! Message.
 
-% send an asynchronous request to the given destination
-% returns the request's reference
-cast(Dst, Request) ->
+% transform a request into a message and send an asynchronously to the given
+% destination returns the request's reference
+% Used for INTER-protocol/domain communication
+cast(Dst, Request) when is_pid(Dst) ->
+   cast(Dst, ?ALL, Request).
+
+cast(Dst, RoutingId, Request) ->
    Ref = make_ref(),
-   Msg = {Ref, self(), Request},
+   Msg = {Ref, self(), RoutingId, Request},
    case Dst of
-      #conf{protocol = P} -> P:cast(Dst, Msg);
+      #conf{protocol = P} -> P:cast(Dst, RoutingId, Msg);
       _ -> Dst ! Msg
    end,
    Ref.
@@ -88,7 +107,7 @@ multicast(Pids, Request) ->
    Ref = make_ref(),
    % Each request is tagged with {Ref, Pid} so that when collecting we know
    % exactly which Pids timed out
-   [spawn(fun() -> Pid ! {{Ref, Pid}, Parent, Request} end) || Pid <- Pids],
+   [spawn(fun() -> Pid ! {{Ref, Pid}, Parent, ?ALL, Request} end) || Pid <- Pids],
    {Ref, Pids}.
 
 
@@ -123,10 +142,13 @@ collectall({Ref, Pids}, Timeout) ->
 
 
 % send synchronous request to a process
-call(Conf = #conf{protocol = P}, Request, Retry) ->
-   P:call(Conf, Request, Retry);
-call(Pid, Request, Retry) ->
-   call(Pid, make_ref(), Request, Retry).
+call(Pid, Request, Retry) when is_pid(Pid) ->
+   call(Pid, ?ALL, Request, Retry).
+
+call(Conf = #conf{protocol = P}, RId, Request, Retry) ->
+   P:call(Conf, RId, Request, Retry);
+call(Pid, RId, Request, Retry) ->
+   call(Pid, make_ref(), RId, Request, Retry).
 
 
 % send parallel requests to all processes in a list and wait for one response
@@ -151,7 +173,7 @@ multicall(Pids, Request, NumResponses, Retry) ->
             Collector = self(),
             % create a sub-process for each Pid to make a call
             [spawn(fun() ->
-                     Collector ! {{Ref, Pid}, call(Pid, Ref, Request, Retry)}
+                     Collector ! {{Ref, Pid}, call(Pid, Ref, ?ALL, Request, Retry)}
                   end) || Pid <- Pids],
             Parent ! {Ref, collectMany(Ref, Pids, [], NumResponses, infinity)}
       end),
@@ -167,13 +189,13 @@ multicall(Pids, Request, NumResponses, Retry) ->
 
 
 % send synchronous request to a given Pid
-call(Pid, Ref, Request, RetryAfter) ->
-   Pid ! {Ref, self(), Request},
+call(Pid, Ref, RoutingId, Request, RetryAfter) ->
+   Pid ! {Ref, self(), RoutingId, Request},
 
    receive
       {Ref, Result} -> Result
    after
-      RetryAfter -> call(Pid, Ref, Request, RetryAfter)
+      RetryAfter -> call(Pid, Ref, RoutingId, Request, RetryAfter)
    end.
 
 

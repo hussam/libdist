@@ -5,10 +5,11 @@
 -export([
       type/0,
       conf_args/1,
-      cast/2,
+      cast/3,
       init_replica/1,
       import/1,
       export/1,
+      export/2,
       update_state/3,
       handle_msg/5
    ]).
@@ -22,10 +23,13 @@
       previous,
       next,
       unstable,
-      stable_count = 0,
-      next_cmd_num = 0
+      tags = [],
+      counter = 0,
+      next_cmd_nums = dict:from_list([ {[], 0} ]),
+      stable_counts = dict:from_list([ {[], 0} ])
    }).
 
+-define(KEYPOS, 1).
 
 %%%%%%%%%%%%%%%%%%%%%
 % Replica Callbacks %
@@ -38,35 +42,48 @@ conf_args(Args) -> Args.
 
 
 % Send an asynchronous command to a chain replicated object
-cast(#conf{replicas = Reps = [Head | _], sm_mod = SMModule}, Command) ->
+cast(#conf{replicas = Reps = [Head | _], sm_mod = SMModule}, RId, Command) ->
    Target = case SMModule:is_mutating(Command) of
       true -> Head;
       false -> lists:last(Reps)
    end,
-   libdist_utils:cast(Target, {command, Command}).
+   libdist_utils:cast(Target, RId, {command, Command}).
 
 
 % Initialize the state of a new replica
 init_replica(_Me) ->
    #chain_state{
-      unstable = ets:new(unstable_commands, [])
+      unstable = ets:new(unstable_commands, [{keypos, ?KEYPOS}])
    }.
 
 
 % Import a previously exported chain state
-import(ExportedState = #chain_state{unstable = UnstableList}) ->
-   Unstable = ets:new(unstable_commands, []),
+import(ExportedState = #chain_state{
+      unstable = UnstableList,
+      stable_counts = StableCountsList,
+      next_cmd_nums = NextCmdNumsList
+   }) ->
+   Unstable = ets:new(unstable_commands, [{keypos, ?KEYPOS}]),
    ets:insert(Unstable, UnstableList),
    ExportedState#chain_state{
-      unstable = Unstable
+      unstable = Unstable,
+      stable_counts = dict:from_list(StableCountsList),
+      next_cmd_nums = dict:from_list(NextCmdNumsList)
    }.
 
 
 % Export a chain replica state
-export(State = #chain_state{unstable = Unstable}) ->
+export(State=#chain_state{unstable=U, stable_counts=SC, next_cmd_nums=NCN}) ->
    State#chain_state{
-      unstable = ets:tab2list(Unstable)
+      unstable = ets:tab2list(U),
+      stable_counts = dict:to_list(SC),
+      next_cmd_nums = dict:to_list(NCN)
    }.
+
+% Export part of a chain replica's state
+export(State = #chain_state{tags = OldTags}, NewTag) ->
+   % TODO: implement this properly!!
+   export(State#chain_state{tags = [NewTag | OldTags]}).
 
 
 % Update the protocol's custom state (due to replacement or reconfiguration)
@@ -83,43 +100,61 @@ handle_msg(_Me, Message, ASE = _AllowSideEffects, SM, State = #chain_state{
       previous = Prev,
       next = Next,
       unstable = Unstable,
-      stable_count = StableCount,
-      next_cmd_num = NextCmdNum
+      tags = Tags,
+      counter = Counter,
+      stable_counts = StableCounts,
+      next_cmd_nums = NextCmdNums
    }) ->
    case Message of
       % Handle command as the HEAD of the chain
-      {Ref, Client, {command, Command}} when Prev == chain_head ->
-         ets:insert(Unstable, {NextCmdNum, Ref, Client, Command}),
-         ?SEND(Next, {Ref, Client, command, NextCmdNum, Command}, ASE),
-         {consume, State#chain_state{next_cmd_num = NextCmdNum + 1}};
+      {Ref, Client, RId, {command, Command}} when Prev == chain_head ->
+         CmdNum = {Tags, Counter},
+         FwdMsg = {CmdNum, Ref, Client, RId, Command},
+         ets:insert(Unstable, FwdMsg),
+         ?SEND(Next, RId, FwdMsg, ASE),
+         {consume, State#chain_state{counter = Counter + 1}};
 
       % Handle command as any replica in the MIDDLE of the chain
-      {Ref, Client, command, NextCmdNum, Cmd} = Msg when Next /= chain_tail ->
-         ?SEND(Next, Msg, ASE),
-         ets:insert(Unstable, {NextCmdNum, Ref, Client, Cmd}),
-         {consume, State#chain_state{next_cmd_num = NextCmdNum + 1}};
+      {CmdNum, _Ref, _Client, RId, _Cmd} = Msg when Next /= chain_tail ->
+         case libdist_utils:is_next_cmd(CmdNum, NextCmdNums) of
+            {true, UpdatedNextCmdNums} ->
+               ?SEND(Next, RId, Msg, ASE),
+               ets:insert(Unstable, Msg),
+               {consume, State#chain_state{next_cmd_nums = UpdatedNextCmdNums}};
+            false ->
+               keep
+         end;
 
       % Handle update command as the TAIL of the chain
-      {Ref, Client, command, NextCmdNum, Command} ->
-         ldsm:do(SM, Ref, Client, Command, ASE),
-         ?SEND(Prev, {stabilized, NextCmdNum}, ASE),
-         NextCount = NextCmdNum + 1,
-         {consume, State#chain_state{next_cmd_num=NextCount, stable_count=NextCount}};
+      {CmdNum, Ref, Client, RId, Command} ->
+         case libdist_utils:is_next_cmd(CmdNum, NextCmdNums) of
+            {true, UpdatedNextCmdNums} ->
+               ldsm:do(SM, Ref, Client, Command, ASE),
+               ?SEND(Prev, RId, {stabilized, CmdNum}, ASE),
+               {consume, State#chain_state{next_cmd_nums = UpdatedNextCmdNums}};
+            false ->
+               keep
+         end;
 
       % Handle query command as the TAIL of the chain
-      {Ref, Client, {command, Command}} ->
+      {Ref, Client, _RId, {command, Command}} ->
          ldsm:do(SM, Ref, Client, Command, ASE),
          consume;
 
-      {stabilized, StableCount} = Msg ->
-         [{StableCount, _, _, Command}] = ets:lookup(Unstable, StableCount),
-         ldsm:do(SM, Command, false),
-         if
-            Prev /= chain_head -> ?SEND(Prev, Msg, ASE);
-            true -> do_not_forward
-         end,
-         ets:delete(Unstable, StableCount),
-         {consume, State#chain_state{stable_count=StableCount+1}};
+      {stabilized, CmdNum} = Msg ->
+         case libdist_utils:is_next_cmd(CmdNum, StableCounts) of
+            {true, NewStableCounts} ->
+               [{CmdNum, _, _, RId, Command}] = ets:lookup(Unstable, CmdNum),
+               ldsm:do(SM, Command, false),
+               if
+                  Prev /= chain_head -> ?SEND(Prev, RId, Msg, ASE);
+                  true -> do_not_forward
+               end,
+               ets:delete(Unstable, CmdNum),
+               {consume, State#chain_state{stable_counts = NewStableCounts}};
+            false ->
+               keep
+         end;
 
       _ ->
          no_match

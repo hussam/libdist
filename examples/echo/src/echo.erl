@@ -18,6 +18,7 @@
       is_mutating/1,
       stop/2,
       export/1,
+      export/2,
       import/1
    ]).
 
@@ -102,6 +103,13 @@ stop(Tag, Reason) ->
 % so that it could later be imported by another state machine. Here, exporting
 % the local state is easy, just return it!
 export(Tag) ->
+   Tag.
+
+
+% The export/2 function allows a state machine to cleanly export part of its
+% local state according to the supplied tag (second argument). Here, this does
+% not make sense.
+export(Tag, _) ->
    Tag.
 
 

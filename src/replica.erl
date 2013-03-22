@@ -17,6 +17,7 @@
       is_mutating/1,
       stop/2,
       export/1,
+      export/2,
       import/1
    ]).
 
@@ -43,10 +44,11 @@ behaviour_info(callbacks) ->
    [
       {type, 0},
       {conf_args, 1},
-      {cast, 2},
+      {cast, 3},
       {init_replica, 1},
       {import, 1},
       {export, 1},
+      {export, 2},
       {update_state, 3},
       {handle_msg, 5}
    ];
@@ -85,6 +87,12 @@ export(State = #state{sm = SM, conf=#conf{protocol=P}, pstate = PState}) ->
    State#state{
       sm = ldsm:export(SM),
       pstate = P:export(PState)
+   }.
+
+export(State = #state{sm = SM, conf=#conf{protocol=P}, pstate = PState}, Tag) ->
+   State#state{
+      sm = ldsm:export(SM, Tag),
+      pstate = P:export(PState, Tag)
    }.
 
 import(State=#state{sm=ExportedSM, conf=#conf{protocol=P}, pstate=ExportedPState}) ->
@@ -130,7 +138,7 @@ handle_msg(Me, Message, ASE = _AllowSideEffects, State = #state{
    case Message of
       % Change this replica's configuration
       % TODO: handle reconfiguration in nested protocols
-      {Ref, Client, {reconfigure, NewConf}} ->
+      {Ref, Client, _RId, {reconfigure, NewConf}} ->
          Client ! {Ref, ok},
          #conf{replicas = NewReplicas, partitions = NewPartitions} = NewConf,
          InNextConf = (
@@ -149,57 +157,71 @@ handle_msg(Me, Message, ASE = _AllowSideEffects, State = #state{
          end;
 
       % update the configuration by replacing OldReplica with NewReplica.
-      {Ref, Client, {replace, Me, NewConf}} ->
-         case ConfType of
-            ?SINGLE ->
-               Client ! {Ref, NewConf},
-               consume;
-            _ ->
-               % update configuration trees locally and compute a new root conf
-               {NewState, NewRootConf} = replace_replica(State, Me, NewConf),
-               Client ! {Ref, NewRootConf},
-               {consume, NewState}
-         end;
+      {Ref, Client, _RId, {replace, Me, NewConf}} ->
+         % update configuration trees locally and notify others
+         ExportedState = State#state{sm = ldsm:export(SM)},
+         {_, NewRootConf} = replace_replica(ExportedState, Me, NewConf, true),
+         ldsm:stop(SM, {replaced, Me, NewConf}),
+         Client ! {Ref, NewRootConf},
+         {stop, replaced};
 
       % update the configuration by replacing OldReplica with NewReplica
       {replace, OldReplica, NewReplica} ->
-         {consume, replace_replica(State, OldReplica, NewReplica)};
+         NewConf = update_conf_members(Conf, OldReplica, NewReplica),
+         % return the updated state
+         NewState = State#state{
+            conf = NewConf,
+            pstate = P:update_state(Me, NewConf, PState)
+         },
+         {consume, NewState};
 
       % Stop this replica
-      {Ref, Client, {stop, Reason}} ->
-         ?SEND(Client, {Ref, ldsm:stop(SM, Reason)}, ASE),
+      {Ref, Client, _RId, {stop, Reason}} ->
+         Client ! {Ref, ldsm:stop(SM, Reason)},
          {stop, Reason};
 
       % Return the configuration at this replica
-      {Ref, Client, get_conf} ->
-         ?SEND(Client, {Ref, Conf}, ASE),
+      {Ref, Client, _RId, get_conf} ->
+         Client ! {Ref, Conf},
          consume;
 
-      {Ref, Client, {inherit_sm, Pid, Retry}} ->
-         NewSM = ldsm:import(libdist_utils:call(Pid, get_sm, Retry)),
-         Client ! {Ref, ok},
+      {Ref, Client, _RId, {inherit_sm, Pid, Coverage, Retry}} ->
+         PidSM = libdist_utils:call(Pid, {get_sm, Coverage}, Retry),
+         PidSMState = ldsm:get_state(PidSM),
+         {NewSMState, NewRootConf} = replace_replica(PidSMState, Pid, Conf, false),
+         NewSM = ldsm:import(ldsm:set_state(PidSM, NewSMState)),
+         Client ! {Ref, NewRootConf},
          {consume, State#state{sm = NewSM}};
 
       % Return the state machine's module
-      {Ref, Client, get_sm_module} ->
+      {Ref, Client, _RId, get_sm_module} ->
          case ConfType of
-            ?SINGLE -> Client ! {Ref, ldsm:module(SM)};  % no need to nest singletons
+            ?SINGLE -> Client ! {Ref, ldsm:module(SM)};  %do not nest singletons
             _ -> Client ! {Ref, ?MODULE}
          end,
          consume;
 
+      % Added for debugging purposes only
+      {Ref, Client, RId, get_sm} ->
+         handle_msg(Me, {Ref, Client, RId, {get_sm, all}}, ASE, State);
+
       % Return the state machine's state
       % TODO: change this into some sort of background state transfer
-      {Ref, Client, get_sm} ->
-         case ConfType of
-            ?SINGLE ->  % no need to nested protocols under singleton (performance)
+      {Ref, Client, _RId, {get_sm, Coverage}} ->
+         case {ConfType, Coverage} of
+            % no need to nest protocols under singletons (performance)
+            {?SINGLE, all} ->
                Client ! {Ref, ldsm:export(SM)};
-            _ ->
-               Client ! {Ref, ldsm:export(?MODULE, export(State))}
+            {?SINGLE, {part, Tag}} ->
+               Client ! {Ref, ldsm:export(SM, Tag)};
+            {_, all} ->
+               Client ! {Ref, ldsm:wrap(?MODULE, export(State))};
+            {_, {part, Tag}} ->
+               Client ! {Ref, ldsm:wrap(?MODULE, export(State, Tag))}
          end,
          consume;
 
-      {Ref, Client, get_tags} ->
+      {Ref, Client, _RId, get_tags} ->
          Client ! {Ref, get_tags(State, [])},
          consume;
 
@@ -225,6 +247,7 @@ handle_msg(Me, Message, ASE = _AllowSideEffects, State = #state{
 %%%%%%%%%%%%%%%%%%%%%
 
 
+% TODO: XXX: This expects an exported state. Fix this!!
 replace_replica(State = #state{
       me = Me,
       sm = SM,
@@ -232,66 +255,51 @@ replace_replica(State = #state{
       conf = Conf = #conf{
          type = ConfType,
          protocol = P,
-         version = Vn,
          replicas = Replicas,
          partitions = Partitions
       }
-   }, OldReplica, NewReplica) ->
+   }, OldReplica, NewReplica, DoNotify) ->
 
-   % modify the configuration with the new list of replicas or partitions
-   NewConf = case ConfType of
-      ?REPL ->
-         Conf#conf{
-            version = Vn+1,
-            replicas = libdist_utils:list_replace(
-               OldReplica, NewReplica, Replicas)
-         };
-
-      ?PART ->
-         {Tag, _} = lists:keyfind(OldReplica, 2, Partitions),
-         Conf#conf{
-            version = Vn+1,
-            partitions = lists:keyreplace(
-               OldReplica, 2, {Tag, NewReplica}, Partitions)
-         }
-   end,
-
-   % if needed, notify siblings in RP Tree of configuration change. This is
-   % only triggered by the actual process being replaced and nobody else
+   % if needed, notify siblings in RP Tree of configuration change. This should
+   % only be triggered by the actual process being replaced and nobody else
    case Me == OldReplica of
+      false ->
+         error(replace_replica_should_not_get_here);
       true ->
          % trigger replacement/reconfiguration on other replicas/partitions
          Others = case ConfType of
+            ?SINGLE ->
+               [];
             ?REPL ->
                lists:delete(OldReplica, Replicas);
             ?PART ->
                [Partition || {_,Partition} <- lists:keydelete(Me, 2, Partitions)]
          end,
-         [ ?SEND(X, {replace, Me, NewReplica}, true) || X <- Others ],
+         [ ?SEND(X, ?ALL, {replace, Me, NewReplica}, DoNotify) || X <- Others ],
+
+         % modify the configuration with the new list of replicas or partitions
+         NewConf = update_conf_members(Conf, OldReplica, NewReplica),
 
          % update higher levels of the RP-Tree if they exist
-         NewRootConf = case ldsm:is_rp_protocol(SM) of
-            false -> NewConf;
-            true -> element(2, replace_replica(ldsm:state(SM), Conf, NewConf))
-         end,
+         {NewSMState, NewRootConf} = replace_replica(
+            ldsm:get_state(SM), Conf, NewConf, DoNotify),
 
          % update protocol state and create new replica/partition state
          NewState = State#state{
             me = NewReplica,
+            sm = ldsm:set_state(SM, NewSMState),
             conf = NewConf,
             pstate = P:update_state(NewReplica, NewConf, PState)
          },
 
          % return the new state and the new root configuration
-         {NewState, NewRootConf};
+         {NewState, NewRootConf}
+   end;
 
-      false ->
-         % return the updated state
-         State#state{
-            conf = NewConf,
-            pstate = P:update_state(Me, NewConf, PState)
-         }
-   end.
+% in case State does not correspond to an R/P protocol
+replace_replica(State, _OldReplica, NewReplica, _DoNotify) -> 
+   {State, NewReplica}.
+
 
 
 % Recursively get the partitioning tags associated with current state machine
@@ -310,5 +318,33 @@ get_tags(#state{
       false -> % top-level rp-tree node, return current tags
          lists:reverse(NewTags);
       true ->
-         get_tags(ldsm:state(SM), NewTags)
+         get_tags(ldsm:get_state(SM), NewTags)
    end.
+
+
+% Create a new configuration based on OldConf where OldMember is replaced by
+% NewMember and all other settings (except the version number) stay the same
+update_conf_members(OldConf = #conf{
+      type = ConfType, version=Vn, replicas = Replicas, partitions = Partitions
+   }, OldMember, NewMember) ->
+   case ConfType of
+      ?REPL ->
+         OldConf#conf{
+            version = Vn + 1,
+            replicas = libdist_utils:list_replace(OldMember, NewMember, Replicas)
+         };
+
+      ?PART ->
+         {Tag, _} = lists:keyfind(OldMember, 2, Partitions),
+         OldConf#conf{
+            version = Vn+1,
+            partitions = lists:keyreplace(
+               OldMember, 2, Partitions, {Tag, NewMember})
+         };
+
+      ?SINGLE ->
+         NewMember
+
+   end.
+
+

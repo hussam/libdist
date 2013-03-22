@@ -5,10 +5,11 @@
 -export([
       type/0,
       conf_args/1,
-      cast/2,
+      cast/3,
       init_replica/1,
       import/1,
       export/1,
+      export/2,
       update_state/3,
       handle_msg/5
    ]).
@@ -38,16 +39,16 @@ conf_args(Args) -> Args.
 
 
 % Send an asynchronous command to a replicated object
-cast(#conf{replicas=Replicas=[Hd | _], sm_mod = SMMod, args = QArgs}, Command) ->
+cast(#conf{replicas=Reps=[Hd | _], sm_mod=SMMod, args=QArgs}, RId, Command) ->
    Target = case proplists:get_bool(shuffle, QArgs) of
-      true -> lists:nth(random:uniform(lists:length(Replicas)), Replicas);
+      true -> lists:nth(random:uniform(lists:length(Reps)), Reps);
       false -> Hd
    end,
    QName = case SMMod:is_mutating(Command) of
       true -> w;
       false -> r
    end,
-   libdist_utils:cast(Target, {QName, Command}).
+   libdist_utils:cast(Target, RId, {QName, Command}).
 
 
 % Initialize the state of a new replica
@@ -71,6 +72,12 @@ export(State = #quorum_state{unstable = Unstable}) ->
    State#quorum_state{
       unstable = ets:tab2list(Unstable)
    }.
+
+
+% Export part of a chain replica's state
+export(State, _Tag) ->
+   % TODO: filter unstable requests that are selected by 'Tag'
+   export(State).
 
 
 % Update the protocol's custom state (due to replacement or reconfiguration)
@@ -103,41 +110,42 @@ handle_msg(Me, Message, ASE = _AllowSideEffects, SM, State = #quorum_state{
    }) ->
    case Message of
       % Respond to a command as a member of a read quorum
-      {Ref, Client, {QTag, Command}} ->
+      {Ref, Client, RId, {QTag, Command}} ->
          {NextCount, QSize} = case QTag of
             r -> {UpdatesCount, R};
             w -> {UpdatesCount + 1, W}
          end,
-         ets:insert(Unstable, {Ref, QSize-1, N-1, Client, Command, -1, []}),
-         Msg = {Ref, Me, QTag, Command},
-         [ ?SEND(Replica, Msg, ASE) || Replica <- Others ],
+         ets:insert(Unstable, {Ref, RId, QSize-1, N-1, Client, Command, -1, []}),
+         Msg = {Ref, Me, RId, QTag, Command},
+         [ ?SEND(Replica, RId, Msg, ASE) || Replica <- Others ],
          {consume, State#quorum_state{updates_count = NextCount}};
 
-      {Ref, Coordinator, r, Command} ->
+      {Ref, Coordinator, RId, r, Command} ->
          Result = ldsm:do(SM, Command, false),
-         ?SEND(Coordinator, {stabilized, Ref, UpdatesCount, Result}, ASE),
+         ?SEND(Coordinator, RId, {stabilized, Ref, UpdatesCount, Result}, ASE),
          consume;
 
       % Respond to a command as a member of a write quorum
-      {Ref, Coordinator, w, Command} ->
+      {Ref, Coordinator, RId, w, Command} ->
          NewCount = UpdatesCount + 1,
          Result = ldsm:do(SM, Command, false),
-         ?SEND(Coordinator, {stabilized,  Ref, NewCount, Result}, ASE),
+         ?SEND(Coordinator, RId, {stabilized, Ref, NewCount, Result}, ASE),
          {consume, State#quorum_state{updates_count = NewCount}};
 
       {stabilized, Ref, Count, Result} ->
-         [{Ref, _, _, Client, Cmd, CurCount, CurResult}] = ets:lookup(Unstable, Ref),
+         [{Ref, RId, _, _, Client, Cmd, CurCount, CurResult}] =
+                                                      ets:lookup(Unstable, Ref),
          % Keep track of the result reflecting the most number of updates
          {MaxCount, MaxResult} = case Count > CurCount of
             true ->
-               ets:update_element(Unstable, Ref, [{6, Count}, {7, Result}]),
+               ets:update_element(Unstable, Ref, [{7, Count}, {8, Result}]),
                {Count, Result};
             false ->
                {CurCount, CurResult}
          end,
 
          % count response towards a quorum result by decrementing quorum count
-         Return = case ets:update_counter(Unstable, Ref, {2, -1}) of
+         Return = case ets:update_counter(Unstable, Ref, {3, -1}) of
             0 ->  % quorum reached
                % perform the command locally and reply with the max-count result
                MyResult = ldsm:do(SM, Cmd, ASE),
@@ -146,13 +154,13 @@ handle_msg(Me, Message, ASE = _AllowSideEffects, SM, State = #quorum_state{
                   true -> MyResult;
                   false -> MaxResult
                end,
-               ?SEND(Client, {Ref, FinalResult}, ASE),
+               ?SEND(Client, RId, {Ref, FinalResult}, ASE),
                {consume, State#quorum_state{updates_count = MyCount}};
             _ -> % quorum not reached
                consume
          end,
          % decrement total number of possible remaining responses (and clean up)
-         case ets:update_counter(Unstable, Ref, {3, -1}) of
+         case ets:update_counter(Unstable, Ref, {4, -1}) of
             0 -> ets:delete(Unstable, Ref);
             _ -> do_nothing
          end,

@@ -16,10 +16,12 @@
 -export([
       is_rp_protocol/1,
       module/1,
-      state/1,
       export/1,
       export/2,
-      import/1
+      import/1,
+      wrap/2,
+      get_state/1,
+      set_state/2
    ]).
 
 -include("helper_macros.hrl").
@@ -32,6 +34,7 @@ behaviour_info(callbacks) ->
       {is_mutating,1},
       {stop, 2},
       {export, 1},
+      {export, 2},
       {import, 1}
    ];
 behaviour_info(_) ->
@@ -60,13 +63,13 @@ stop(SMC, Reason) ->
 module({_, Module, _}) ->
    Module.
 
-state(SMC) ->
-   call(SMC, get_state).
-
 export(SMC = {_, Module, _}) ->
    {Module, call(SMC, export)}.
 
-export(Module, State) ->
+export(SMC = {_, Module, _}, Tag) ->
+   {Module, call(SMC, export, Tag)}.
+
+wrap(Module, State) ->
    {Module, State}.
 
 import({Module, ExportedState}) ->
@@ -76,9 +79,17 @@ import({Module, ExportedState}) ->
       self()
    }.
 
+get_state({_Module, State}) -> State;     % for already exported state
+get_state(SMC) -> call(SMC, get_state).   % for a constructed/existing SM
+
+
+set_state({Module, _OldState}, NewState) -> {Module, NewState};
+set_state(SMC, NewState) -> call(SMC, set_state, NewState).
+
 
 % is the passed in state machine a libdist replication or partitioning protocol?
 is_rp_protocol({_, replica, _}) -> true;
+is_rp_protocol({replica, _}) -> true;   % for exported state
 is_rp_protocol(_) -> false.
 
 
@@ -92,12 +103,19 @@ loop(Module, State) ->
       {SMC = {_, _, C}, do, Ref, Client, Command, AllowSideEffects} ->
          case Module:handle_cmd(State, Command, AllowSideEffects) of
             {reply, Reply} ->
-               ?SEND(Client, {Ref, Reply}, AllowSideEffects),
+               case AllowSideEffects of
+                  true -> Client ! {Ref, Reply};
+                  false -> do_nothing
+               end,
+               Client ! {Ref, Reply},
                C ! {SMC, done},
                loop(Module, State);
 
             {reply, Reply, NewState} ->
-               ?SEND(Client, {Ref, Reply}, AllowSideEffects),
+               case AllowSideEffects of
+                  true -> Client ! {Ref, Reply};
+                  false -> do_nothing
+               end,
                C ! {SMC, done},
                loop(Module, NewState);
 
@@ -137,9 +155,17 @@ loop(Module, State) ->
          C ! {SMC, Module:export(State)},
          loop(Module, State);
 
+      {SMC = {_, _, C}, export, Tag} ->
+         C ! {SMC, Module:export(State, Tag)},
+         loop(Module, State);
+
       {SMC = {_, _, C}, get_state} ->
          C ! {SMC, State},
-         loop(Module, State)
+         loop(Module, State);
+
+      {SMC = {_, _, C}, set_state, NewState} ->
+         C ! {SMC, ok},
+         loop(Module, NewState)
    end.
 
 

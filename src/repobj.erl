@@ -5,7 +5,9 @@
       new/4,
       inherit/4,
       cast/2,
+      cast/3,
       call/3,
+      call/4,
       reconfigure/3
    ]).
 
@@ -36,13 +38,19 @@ inherit(Pid, PSettings = {PModule, _}, Nodes, Timeout) ->
 
 
 % Send an asynchronous command to a replicated object
-cast(Conf=#conf{protocol = P}, Command) ->
-   P:cast(Conf, Command).
+cast(Conf, Command) ->
+   cast(Conf, ?ALL, Command).
+
+cast(Conf=#conf{protocol = P}, CRId, Command) ->
+   P:cast(Conf, CRId, Command).
 
 
 % Send a synchronous command to a replicated object
-call(Conf = #conf{protocol = P}, Command, Timeout) ->
-   libdist_utils:collect(P:cast(Conf, Command), Timeout).
+call(Conf, Command, Timeout) ->
+   call(Conf, ?ALL, Command, Timeout).
+
+call(Conf = #conf{protocol = P}, CRId, Command, Timeout) ->
+   libdist_utils:collect(P:cast(Conf, CRId, Command), Timeout).
 
 
 % Reconfigure the replicated object
@@ -79,15 +87,9 @@ reconfigure(OldConf=#conf{type=T}, NewConf=#conf{type=T}, Timeout) ->
 
 % Configure a set of processes for the first time
 configure(ProtocolSettings, SMModule, Members, Timeout) ->
-   Conf0 = make_conf(ProtocolSettings, SMModule, Members),
-   Conf = Conf0#conf{version = 1},
-   Refs = libdist_utils:multicast(Members, {reconfigure, Conf}),
-   case libdist_utils:collectall(Refs, Timeout) of
-      {ok, _} ->
-         {ok, Conf};
-      Error ->
-         Error
-   end.
+   Conf = make_conf(ProtocolSettings, SMModule, Members),
+   Conf0 = Conf#conf{replicas = [], partitions = []},
+   reconfigure(Conf0, Conf, Timeout).
 
 
 % Create a distributed system configuration
