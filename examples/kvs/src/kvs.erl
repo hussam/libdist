@@ -26,11 +26,17 @@
 
 % Bind a value to a key
 put(Conf, Key, Value) ->
-   repobj:call(Conf, Key, {put, Key, Value}, ?TIMEOUT).
+   case repobj:call(Conf, Key, {put, Key, Value}, ?TIMEOUT) of
+      {ok, Result} -> Result;
+      Error -> Error
+   end.
 
 % Get the value bound to a key
 get(Conf, Key) ->
-   repobj:call(Conf, Key, {get, Key}, ?TIMEOUT).
+   case repobj:call(Conf, Key, {get, Key}, ?TIMEOUT) of
+      {ok, Result} -> Result;
+      Error -> Error
+   end.
 
 
 % Returns a function that given a tag, will split it into NumPartitions partitions
