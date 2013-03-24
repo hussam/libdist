@@ -233,7 +233,7 @@ handle_msg(Me, Message, ASE = _AllowSideEffects, State = #state{
                {consume, State#state{pstate = NewPState}};
 
             {keep, NewPState} ->
-               {consume, State#state{pstate = NewPState}};
+               {keep, State#state{pstate = NewPState}};
 
             Other ->
                Other
