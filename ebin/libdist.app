@@ -13,10 +13,7 @@
          chain,
          primary_backup,
          quorum,
-         shard,
-         elastic,
-         elastic_chain,
-         elastic_primary_backup
+         shard
          ]},
       {registered, []},
       {applications, [kernel, stdlib]}
