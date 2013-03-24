@@ -115,11 +115,11 @@ handle_msg(_Me, Message, ASE = _AllowSideEffects, SM, State = #chain_state{
          {consume, State#chain_state{counter = Counter + 1}};
 
       % Handle command as any replica in the MIDDLE of the chain
-      {CmdNum, _Ref, _Client, RId, _Cmd} = Msg when Next /= chain_tail ->
+      {CmdNum, _Ref, _Client, RId, _Cmd} when Next /= chain_tail ->
          case libdist_utils:is_next_cmd(CmdNum, NextCmdNums) of
             {true, UpdatedNextCmdNums} ->
-               ?SEND(Next, RId, Msg, ASE),
-               ets:insert(Unstable, Msg),
+               ?SEND(Next, RId, Message, ASE),
+               ets:insert(Unstable, Message),
                {consume, State#chain_state{next_cmd_nums = UpdatedNextCmdNums}};
             false ->
                keep
@@ -141,13 +141,13 @@ handle_msg(_Me, Message, ASE = _AllowSideEffects, SM, State = #chain_state{
          ldsm:do(SM, Ref, Client, Command, ASE),
          consume;
 
-      {stabilized, CmdNum} = Msg ->
+      {stabilized, CmdNum} ->
          case libdist_utils:is_next_cmd(CmdNum, StableCounts) of
             {true, NewStableCounts} ->
                [{CmdNum, _, _, RId, Command}] = ets:lookup(Unstable, CmdNum),
                ldsm:do(SM, Command, false),
                if
-                  Prev /= chain_head -> ?SEND(Prev, RId, Msg, ASE);
+                  Prev /= chain_head -> ?SEND(Prev, RId, Message, ASE);
                   true -> do_not_forward
                end,
                ets:delete(Unstable, CmdNum),
