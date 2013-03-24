@@ -142,6 +142,7 @@ handle_msg(Me, Message, ASE = _AllowSideEffects, State = #state{
          Client ! {Ref, ok},
          #conf{replicas = NewReplicas, partitions = NewPartitions} = NewConf,
          InNextConf = (
+            ((ConfType == ?SINGLE) and (NewReplicas == [Me])) or
             ((ConfType == ?REPL) and lists:member(Me, NewReplicas)) or
             ((ConfType == ?PART) and lists:keymember(Me, 2, NewPartitions))
          ),
@@ -259,7 +260,6 @@ replace_replica(State = #state{
          partitions = Partitions
       }
    }, OldReplica, NewReplica, DoNotify) ->
-
    % if needed, notify siblings in RP Tree of configuration change. This should
    % only be triggered by the actual process being replaced and nobody else
    case Me == OldReplica of

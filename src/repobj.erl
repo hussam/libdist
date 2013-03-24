@@ -59,6 +59,7 @@ reconfigure(OldConf=#conf{type=T}, NewConf=#conf{type=T}, Timeout) ->
    #conf{replicas=NewReps, partitions=NewParts} = NewConf,
    NextConf = NewConf#conf{version = Vn + 1},
    {OldPids, NewPids} = case T of
+      ?SINGLE -> {OldReps, NewReps};
       ?REPL -> {OldReps, NewReps};
       ?PART -> { [P || {_,P} <- OldParts], [P || {_,P} <- NewParts]}
    end,
@@ -98,7 +99,9 @@ make_conf({Protocol, ProtocolArgs}, SMModule, Members) ->
       ?SINGLE ->
          #conf{
             type = ?SINGLE,
-            replicas = lists:flatten([Members])
+            protocol = Protocol,
+            sm_mod = SMModule,
+            replicas = Members
          };
       ?REPL ->
          #conf{
