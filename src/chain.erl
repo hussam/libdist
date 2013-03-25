@@ -144,14 +144,20 @@ handle_msg(_Me, Message, ASE = _AllowSideEffects, SM, State = #chain_state{
       {stabilized, CmdNum} ->
          case libdist_utils:is_next_cmd(CmdNum, StableCounts) of
             {true, NewStableCounts} ->
-               [{CmdNum, _, _, RId, Command}] = ets:lookup(Unstable, CmdNum),
-               ldsm:do(SM, Command, false),
-               if
-                  Prev /= chain_head -> ?SEND(Prev, RId, Message, ASE);
-                  true -> do_not_forward
-               end,
-               ets:delete(Unstable, CmdNum),
-               {consume, State#chain_state{stable_counts = NewStableCounts}};
+               case ets:lookup(Unstable, CmdNum) of
+                  [{CmdNum, _, _, RId, Command}] ->
+                     ldsm:do(SM, Command, false),
+                     if
+                        Prev /= chain_head -> ?SEND(Prev, RId, Message, ASE);
+                        true -> do_not_forward
+                     end,
+                     ets:delete(Unstable, CmdNum),
+                     {consume, State#chain_state{stable_counts = NewStableCounts}};
+                  [] ->
+                     % XXX: this is a temporary fix for partitioned state
+                     % machines. Must find a real fix soon. FIXME!!!
+                     keep     % ignore it
+               end;
             false ->
                keep
          end;
