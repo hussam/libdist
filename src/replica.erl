@@ -223,7 +223,7 @@ handle_msg(Me, Message, ASE = _AllowSideEffects, State = #state{
          consume;
 
       {Ref, Client, _RId, get_tags} ->
-         Client ! {Ref, get_tags(State, [])},
+         Client ! {Ref, get_tags(State#state{sm = ldsm:export(SM)}, [])},
          consume;
 
 
@@ -248,7 +248,7 @@ handle_msg(Me, Message, ASE = _AllowSideEffects, State = #state{
 %%%%%%%%%%%%%%%%%%%%%
 
 
-% TODO: XXX: This expects an exported state. Fix this!!
+% TODO: XXX: This expects an exported state. FIXME!!
 replace_replica(State = #state{
       me = Me,
       sm = SM,
@@ -303,6 +303,7 @@ replace_replica(State, _OldReplica, NewReplica, _DoNotify) ->
 
 
 % Recursively get the partitioning tags associated with current state machine
+% TODO: XXX: This expects an exported state. FIXME!!
 get_tags(#state{
       me = Me,
       sm = SM,
