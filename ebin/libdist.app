@@ -13,7 +13,8 @@
          chain,
          primary_backup,
          quorum,
-         shard
+         shard,
+         cache
          ]},
       {registered, []},
       {applications, [kernel, stdlib]}
