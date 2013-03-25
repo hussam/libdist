@@ -45,10 +45,7 @@ cast(#conf{partitions = Ps, route_fn = F}, RId, Command) ->
          % XXX TODO FIXME!!! Make sure this actually makes sense. Also, does it
          % need to be recursively done for all layers above as long as the
          % corresponding configurations are not this 'shard' protocol?
-         CmdMod = case Command of
-            {Ref, Client, ?ALL, C} -> {Ref, Client, ?HEAD, C};
-            _ -> Command
-         end,
+         CmdMod = fix_bcast_rid(Command),
          libdist_utils:cast(Hd, ?HEAD, {command, CmdMod});
       ?HEAD ->
          [{_, Hd} | _] = Ps,
@@ -93,3 +90,14 @@ handle_msg(_Me, Message, ASE = _AllowSideEffects, SM, _State) ->
       _ ->
          no_match
    end.
+
+
+%%%%%%%%%%%%%%%%%%%%%
+% Private Functions %
+%%%%%%%%%%%%%%%%%%%%%
+
+
+fix_bcast_rid({Ref, Client, ?ALL, {command, Command}}) ->
+   {Ref, Client, ?HEAD, {command, fix_bcast_rid(Command)}};
+fix_bcast_rid(Command) ->
+   Command.
