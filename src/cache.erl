@@ -68,11 +68,7 @@ export(State, _NewTag) ->
 
 
 % Update the protocol's custom state (due to replacement or reconfiguration)
-update_state(Me, #conf{replicas = NewReps}, State) ->
-   Backend = case hd(NewReps) of
-      Me -> Me;
-      B -> B
-   end,
+update_state(_Me, #conf{replicas = [Backend | _]}, State) ->
    State#cache_state{backend = Backend}.
 
 
