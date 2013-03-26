@@ -1,44 +1,13 @@
 -module(server).
 
 -export([
-      start/1,
-      start/3,
-      append_handler/3,
-      prepend_handler/3,
-      remove_handler/2
+      start/3
    ]).
 
 
-% Start a server on the given node with no registered handler module
-start(Node) ->
-   spawn(Node, fun() -> recv_loop() end).
-
 % Start a server on the given node and register a handler module
 start(Node, HandlerModule, InitArgs) ->
-   PID = start(Node),
-   prepend_handler(PID, HandlerModule, InitArgs),
-   PID.
-
-% Register a new message handler module at the end of the handlers list
-append_handler(RecvPID, HandlerModule, InitArgs) ->
-   RecvPID ! {'$append_handler', self(), HandlerModule, InitArgs},
-   receive
-      ok -> ok
-   end.
-
-% Register a new message handler module at the front of the handlers list
-prepend_handler(RecvPID, HandlerModule, InitArgs) ->
-   RecvPID ! {'$prepend_handler', self(), HandlerModule, InitArgs},
-   receive
-      ok -> ok
-   end.
-
-% Remove a handler module
-remove_handler(RecvPID, HandlerModule) ->
-   RecvPID ! {'$rm_handler', self(), HandlerModule},
-   receive
-      ok -> ok
-   end.
+   spawn(Node, fun() -> recv_loop(HandlerModule, InitArgs) end).
 
 
 %%%%%%%%%%%%%%%%%%%%%
@@ -47,9 +16,9 @@ remove_handler(RecvPID, HandlerModule) ->
 
 
 % Receive Loop: buffer incoming messages until the worker process can take them.
-recv_loop() ->
+recv_loop(HandlerModule, InitArgs) ->
    Self = self(),
-   WorkerPID = spawn(fun() -> work_loop(Self) end),
+   WorkerPID = spawn(fun() -> work_loop(Self, HandlerModule, InitArgs) end),
    recv_loop([], 0, WorkerPID, true).
 
 recv_loop(MsgStack, StackLen, WorkerPID, WorkerFree) ->
@@ -60,18 +29,6 @@ recv_loop(MsgStack, StackLen, WorkerPID, WorkerFree) ->
 
       '$worker_done' ->
          recv_loop([], 0, WorkerPID, true);
-
-      {'$append_handler', _Client, _HandlerModule, _InitArgs} = Msg ->
-         WorkerPID ! Msg,
-         recv_loop(MsgStack, StackLen, WorkerPID, WorkerFree);
-
-      {'$prepend_handler', _Client, _HandlerModule, _InitArgs} = Msg ->
-         WorkerPID ! Msg,
-         recv_loop(MsgStack, StackLen, WorkerPID, WorkerFree);
-
-      {'$rm_handler', _Client, _HandlerModule} = Msg ->
-         WorkerPID ! Msg,
-         recv_loop(MsgStack, StackLen, WorkerPID, WorkerFree);
 
       {'$stop', Reason} ->
          exit(Reason);
@@ -88,37 +45,19 @@ recv_loop(MsgStack, StackLen, WorkerPID, WorkerFree) ->
 % Worker Loop: processes as many existing messages as possible, then waits
 % to receive a batch of new messages from the receive loop. The new messages are
 % appended to the list of kept/unprocessed messages.
-work_loop(RecvPID) ->
-   put('$addr', RecvPID),
-   work_loop(RecvPID, [], []).
+work_loop(RecvPID, HandlerModule, InitArgs) ->
+   State = HandlerModule:init(RecvPID, InitArgs),
+   work_loop(RecvPID, HandlerModule, State, []).
 
-work_loop(RecvPID, HandlerModules, MessageQueue) ->
-   KeptMsgs = handle_messages([], MessageQueue, HandlerModules),
+work_loop(RecvPID, Handler, State, MessageQ) ->
+   {KeptMsgs, NewState} = handle_messages(MessageQ, [], RecvPID, Handler, State),
 
    RecvPID ! '$worker_done',
 
    receive
       {'$new_msgs', NewMsgs} ->
          NextQueue = merge_into_queue(KeptMsgs, NewMsgs),
-         work_loop(RecvPID, HandlerModules, NextQueue);
-
-      {'$append_handler', Client, NewModule, InitArgs} ->
-         NextHandlers = HandlerModules ++ [NewModule],
-         put(NewModule, NewModule:init(RecvPID, InitArgs)), % initialize handler
-         Client ! ok,
-         work_loop(RecvPID, NextHandlers, MessageQueue);
-
-      {'$prepend_handler', Client, NewModule, InitArgs} ->
-         NextHandlers = [NewModule | HandlerModules],
-         put(NewModule, NewModule:init(RecvPID, InitArgs)), % initialize handler
-         Client ! ok,
-         work_loop(RecvPID, NextHandlers, MessageQueue);
-
-      {'$rm_handler', Client, Module} ->
-         NextHandlers = lists:delete(Module, HandlerModules),
-         erase(Module),    % XXX: anything else required for state cleanup?
-         Client ! ok,
-         work_loop(RecvPID, NextHandlers, MessageQueue)
+         work_loop(RecvPID, Handler, NewState, NextQueue)
    end.
 
 
@@ -127,41 +66,24 @@ work_loop(RecvPID, HandlerModules, MessageQueue) ->
 %%%%%%%%%%%%%%%%%%%%%
 
 
-% Process as many messages as possible using the given HandlerModules. Return a
-% list of 'KeptMessages' that were not consumed by handlers. The list is
-% returned in reverse queue order.
-handle_messages(KeptMessages, [], _HandlerModules) ->
-   KeptMessages;
-handle_messages(KeptMessages, [Message | RemMessages], HandlerModules) ->
-   case handle_message(Message, HandlerModules) of
-      consume ->
-         handle_messages(KeptMessages, RemMessages, HandlerModules);
-      keep ->
-         handle_messages([Message | KeptMessages], RemMessages, HandlerModules)
-   end.
-
-
-% Process a single message using the given handler modules. Each module's
-% handler is tried in order until the message is either 'consumed' or no more
-% modules remain. Returns the fate of the message: either 'consume' or 'keep'.
-handle_message(_, []) ->
-   keep;
-handle_message(Message, [Module | RemModules]) ->
-   Addr = get('$addr'), State = get(Module),    % XXX: why not send as args?
-   case Module:handle_msg(Addr, Message, State) of
+% Process as many messages as possible using the given 'Handler' module. Return
+% a list of 'KeptMsgs' that were not consumed by the handler and the new
+% state. The list is returned in reverse queue order.
+handle_messages([], KeptMsgs, _Addr, _Handler, State) ->
+   {KeptMsgs, State};
+handle_messages([Message | RemMsgs], KeptMsgs, Addr, Handler, State) ->
+   case Handler:handle_msg(Addr, Message, State) of
       % Consume message and modify local state
       {consume, NewState} ->
-         put(Module, NewState),
-         consume;
+         handle_messages(RemMsgs, KeptMsgs, Addr, Handler, NewState);
 
       % Consume message without modifying local state
       consume ->
-         consume;
+         handle_messages(RemMsgs, KeptMsgs, Addr, Handler, State);
 
       % Keep message and modify local state
       {keep, NewState} ->
-         put(Module, NewState),
-         handle_message(Message, RemModules);
+         handle_messages(RemMsgs, [Message|KeptMsgs], Addr, Handler, NewState);
 
       % Stop server for the given Reason
       {stop, Reason} ->
@@ -170,7 +92,7 @@ handle_message(Message, [Module | RemModules]) ->
 
       % Either 'Keep with no state modification' or 'No Match'
       _ ->
-         handle_message(Message, RemModules)
+         handle_messages(RemMsgs, [Message|KeptMsgs], Addr, Handler, State)
    end.
 
 
