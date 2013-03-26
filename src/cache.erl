@@ -84,7 +84,7 @@ handle_msg(Me, Message, ASE = _AllowSideEffects, SM, _State = #cache_state{
    case Message of
       % Handle a read command as a cache replica
       {Ref, Client, RId, {read, Command}} ->
-         case ets:lookup(Command, LocalStore) of
+         case ets:lookup(LocalStore, Command) of
             [{_, Result}] ->     % cache hit
                ?SEND(Client, RId, {Ref, Result}, ASE);
             _ ->                 % cache miss
