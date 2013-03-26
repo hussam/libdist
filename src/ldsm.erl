@@ -107,7 +107,6 @@ loop(Module, State) ->
                   true -> Client ! {Ref, Reply};
                   false -> do_nothing
                end,
-               Client ! {Ref, Reply},
                C ! {SMC, done},
                loop(Module, State);
 
