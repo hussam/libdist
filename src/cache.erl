@@ -20,7 +20,6 @@
 
 % State specific to a chain replica
 -record(cache_state, {
-      role,
       local_store,
       backend
    }).
@@ -39,11 +38,11 @@ conf_args(Args) -> Args.
 
 % Send an asynchronous command to a chain replicated object
 cast(#conf{replicas = [Head | Tail], sm_mod = SMModule}, RId, Command) ->
-   Target = case SMModule:is_mutating(Command) of
-      true -> Head;
-      false -> lists:nth(random:uniform(lists:length(Tail)), Tail)
+   {Tag, Target} = case SMModule:is_mutating(Command) of
+      true -> {write, Head};
+      false -> {read, lists:nth(random:uniform(length(Tail)), Tail)}
    end,
-   libdist_utils:cast(Target, RId, {command, Command}).
+   libdist_utils:cast(Target, RId, {Tag, Command}).
 
 
 % Initialize the state of a new replica
@@ -54,16 +53,14 @@ init_replica(_Me) ->
 
 
 % Import a previously exported cache state
-import(Role) ->
+import(_) ->
    #cache_state{
-      role = Role,
       local_store = ets:new(cached_commands, ?ETS_OPTS)
    }.
 
 
 % Export a cache replica state
-export(#cache_state{role=Role}) ->
-   Role.    % only export the role and not cached commands
+export(_) -> [].     % do not export anything
 
 % Export part of a cache replica's state
 export(State, _NewTag) ->
@@ -72,22 +69,21 @@ export(State, _NewTag) ->
 
 % Update the protocol's custom state (due to replacement or reconfiguration)
 update_state(Me, #conf{replicas = NewReps}, State) ->
-   {NewRole, Backend} = case hd(NewReps) of
-      Me -> {backend, Me};
-      B -> {cache, B}
+   Backend = case hd(NewReps) of
+      Me -> Me;
+      B -> B
    end,
-   State#cache_state{role = NewRole, backend = Backend}.
+   State#cache_state{backend = Backend}.
 
 
 % Handle a queued message
 handle_msg(Me, Message, ASE = _AllowSideEffects, SM, _State = #cache_state{
-      role = Role,
       local_store = LocalStore,
       backend = Backend
    }) ->
    case Message of
-      % Handle command as a cache replica
-      {Ref, Client, RId, {command, Command}} when Role == cache ->
+      % Handle a read command as a cache replica
+      {Ref, Client, RId, {read, Command}} ->
          case ets:lookup(Command, LocalStore) of
             [{_, Result}] ->     % cache hit
                ?SEND(Client, RId, {Ref, Result}, ASE);
@@ -96,8 +92,8 @@ handle_msg(Me, Message, ASE = _AllowSideEffects, SM, _State = #cache_state{
          end,
          consume;
 
-      % Handle command as a backend replica
-      {Ref, Client, _RId, {command, Command}} ->
+      % Handle a write command as a backend replica
+      {Ref, Client, _RId, {write, Command}} ->
          ldsm:do(SM, Ref, Client, Command, ASE),
          consume;
 
