@@ -41,7 +41,7 @@ conf_args(Args) -> Args.
 % Send an asynchronous command to a replicated object
 cast(#conf{replicas=Reps=[Hd | _], sm_mod=SMMod, args=QArgs}, RId, Command) ->
    Target = case proplists:get_bool(shuffle, QArgs) of
-      true -> lists:nth(random:uniform(lists:length(Reps)), Reps);
+      true -> lists:nth(random:uniform(length(Reps)), Reps);
       false -> Hd
    end,
    QName = case SMMod:is_mutating(Command) of
