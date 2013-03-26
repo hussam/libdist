@@ -110,22 +110,6 @@ handle_msg(Me, Message, ASE = _AllowSideEffects, SM, State = #quorum_state{
    }) ->
    case Message of
       % Respond to a command as a member of a read quorum
-      {Ref, Client, RId, {QTag, Command}} ->
-         {NextCount, QSize} = case QTag of
-            read -> {UpdatesCount, R};
-            write -> {UpdatesCount + 1, W}
-         end,
-         case QSize of
-            1 ->
-               ldsm:do(SM, Ref, Client, Command, ASE);
-            _ ->
-               ets:insert(Unstable,
-                  {Ref, RId, QSize-1, N-1, Client, Command, -1, []}),
-               Msg = {Ref, Me, RId, QTag, Command},
-               [ ?SEND(Replica, RId, Msg, ASE) || Replica <- Others ]
-         end,
-         {consume, State#quorum_state{updates_count = NextCount}};
-
       {Ref, Coordinator, RId, read, Command} ->
          Result = ldsm:do(SM, Command, false),
          ?SEND(Coordinator, RId, {stabilized, Ref, UpdatesCount, Result}, ASE),
@@ -171,6 +155,24 @@ handle_msg(Me, Message, ASE = _AllowSideEffects, SM, State = #quorum_state{
             _ -> do_nothing
          end,
          Return;
+
+      % Respond to a client command as a coordinator
+      {Ref, Client, RId, {QTag, Command}} ->
+         {NextCount, QSize} = case QTag of
+            read -> {UpdatesCount, R};
+            write -> {UpdatesCount + 1, W}
+         end,
+         case QSize of
+            1 ->
+               ldsm:do(SM, Ref, Client, Command, ASE);
+            _ ->
+               ets:insert(Unstable,
+                  {Ref, RId, QSize-1, N-1, Client, Command, -1, []}),
+               Msg = {Ref, Me, RId, QTag, Command},
+               [ ?SEND(Replica, RId, Msg, ASE) || Replica <- Others ]
+         end,
+         {consume, State#quorum_state{updates_count = NextCount}};
+
 
       _ ->
          no_match
