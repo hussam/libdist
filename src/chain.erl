@@ -43,11 +43,11 @@ conf_args(Args) -> Args.
 
 % Send an asynchronous command to a chain replicated object
 cast(#conf{replicas = Reps = [Head | _], sm_mod = SMModule}, RId, Command) ->
-   Target = case SMModule:is_mutating(Command) of
-      true -> Head;
-      false -> lists:last(Reps)
+   {Tag, Target} = case SMModule:is_mutating(Command) of
+      true -> {write, Head};
+      false -> {read, lists:last(Reps)}
    end,
-   libdist_utils:cast(Target, RId, {command, Command}).
+   libdist_utils:cast(Target, RId, {Tag, Command}).
 
 
 % Initialize the state of a new replica
@@ -107,7 +107,7 @@ handle_msg(_Me, Message, ASE = _AllowSideEffects, SM, State = #chain_state{
    }) ->
    case Message of
       % Handle command as the HEAD of the chain
-      {Ref, Client, RId, {command, Command}} when Prev == chain_head ->
+      {Ref, Client, RId, {write, Command}} when Prev == chain_head ->
          CmdNum = {Tags, Counter},
          FwdMsg = {CmdNum, Ref, Client, RId, Command},
          ets:insert(Unstable, FwdMsg),
@@ -137,7 +137,7 @@ handle_msg(_Me, Message, ASE = _AllowSideEffects, SM, State = #chain_state{
          end;
 
       % Handle query command as the TAIL of the chain
-      {Ref, Client, _RId, {command, Command}} ->
+      {Ref, Client, _RId, {read, Command}} ->
          ldsm:do(SM, Ref, Client, Command, ASE),
          consume;
 

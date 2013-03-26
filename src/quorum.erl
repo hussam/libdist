@@ -45,8 +45,8 @@ cast(#conf{replicas=Reps=[Hd | _], sm_mod=SMMod, args=QArgs}, RId, Command) ->
       false -> Hd
    end,
    QName = case SMMod:is_mutating(Command) of
-      true -> w;
-      false -> r
+      true -> write;
+      false -> read
    end,
    libdist_utils:cast(Target, RId, {QName, Command}).
 
@@ -112,21 +112,27 @@ handle_msg(Me, Message, ASE = _AllowSideEffects, SM, State = #quorum_state{
       % Respond to a command as a member of a read quorum
       {Ref, Client, RId, {QTag, Command}} ->
          {NextCount, QSize} = case QTag of
-            r -> {UpdatesCount, R};
-            w -> {UpdatesCount + 1, W}
+            read -> {UpdatesCount, R};
+            write -> {UpdatesCount + 1, W}
          end,
-         ets:insert(Unstable, {Ref, RId, QSize-1, N-1, Client, Command, -1, []}),
-         Msg = {Ref, Me, RId, QTag, Command},
-         [ ?SEND(Replica, RId, Msg, ASE) || Replica <- Others ],
+         case QSize of
+            1 ->
+               ldsm:do(SM, Ref, Client, Command, ASE);
+            _ ->
+               ets:insert(Unstable,
+                  {Ref, RId, QSize-1, N-1, Client, Command, -1, []}),
+               Msg = {Ref, Me, RId, QTag, Command},
+               [ ?SEND(Replica, RId, Msg, ASE) || Replica <- Others ]
+         end,
          {consume, State#quorum_state{updates_count = NextCount}};
 
-      {Ref, Coordinator, RId, r, Command} ->
+      {Ref, Coordinator, RId, read, Command} ->
          Result = ldsm:do(SM, Command, false),
          ?SEND(Coordinator, RId, {stabilized, Ref, UpdatesCount, Result}, ASE),
          consume;
 
       % Respond to a command as a member of a write quorum
-      {Ref, Coordinator, RId, w, Command} ->
+      {Ref, Coordinator, RId, write, Command} ->
          NewCount = UpdatesCount + 1,
          Result = ldsm:do(SM, Command, false),
          ?SEND(Coordinator, RId, {stabilized, Ref, NewCount, Result}, ASE),

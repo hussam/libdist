@@ -77,6 +77,8 @@ handle_cmd(State = #state{me = Me}, Message, AllowSideEffects) ->
       _ -> noreply
    end.
 
+is_mutating({_Ref, _Client, _RId, {read, _Command}}) ->
+   false;
 is_mutating(_) ->
    true.
 
