@@ -21,7 +21,8 @@
 % State specific to a chain replica
 -record(cache_state, {
       local_store,
-      backend
+      backend,
+      caches = []
    }).
 
 -define(ETS_OPTS, []).
@@ -68,14 +69,15 @@ export(State, _NewTag) ->
 
 
 % Update the protocol's custom state (due to replacement or reconfiguration)
-update_state(_Me, #conf{replicas = [Backend | _]}, State) ->
-   State#cache_state{backend = Backend}.
+update_state(_Me, #conf{replicas = [Backend | Caches]}, State) ->
+   State#cache_state{backend = Backend, caches = Caches}.
 
 
 % Handle a queued message
 handle_msg(Me, Message, ASE = _AllowSideEffects, SM, _State = #cache_state{
       local_store = LocalStore,
-      backend = Backend
+      backend = Backend,
+      caches = Caches
    }) ->
    case Message of
       % Handle a read command as a cache replica
@@ -89,8 +91,9 @@ handle_msg(Me, Message, ASE = _AllowSideEffects, SM, _State = #cache_state{
          consume;
 
       % Handle a write command as a backend replica
-      {Ref, Client, _RId, {write, Command}} ->
+      {Ref, Client, RId, {write, Command}} ->
          ldsm:do(SM, Ref, Client, Command, ASE),
+         [ ?SEND(C, RId, {invalidate, Command}, ASE) || C <- Caches ],
          consume;
 
       % Handle a command forwarded by a cache replica
@@ -103,6 +106,11 @@ handle_msg(Me, Message, ASE = _AllowSideEffects, SM, _State = #cache_state{
       % Handle a cache update at a cache replica
       {cache_update, Command, Result} ->
          ets:insert(LocalStore, {Command, Result}),
+         consume;
+
+      % Handle a cache invalidation command at a cache replica
+      {invalidate, Command} ->
+         ets:delete(LocalStore, Command),
          consume;
 
       _ ->
