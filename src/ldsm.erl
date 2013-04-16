@@ -44,47 +44,45 @@ behaviour_info(_) ->
 start(Module, Args) ->
    {
       spawn(fun() -> loop(Module, Module:init_sm(Args)) end),
-      Module,
-      self()
+      Module
    }.
 
-is_mutating({_, Module, _}, Command) ->
+is_mutating({_, Module}, Command) ->
    Module:is_mutating(Command).
 
-do(SMC, Command, AllowSideEffects) ->
-   call(SMC, do, Command, AllowSideEffects).
+do(SM, Command, AllowSideEffects) ->
+   call(SM, do, Command, AllowSideEffects).
 
-do(SMC, Ref, Client, Command, AllowSideEffects) ->
-   call(SMC, do, Ref, Client, Command, AllowSideEffects).
+do(SM, Ref, Client, Command, AllowSideEffects) ->
+   call(SM, do, Ref, Client, Command, AllowSideEffects).
 
-stop(SMC, Reason) ->
-   call(SMC, stop, Reason).
+stop(SM, Reason) ->
+   call(SM, stop, Reason).
 
-module({_, Module, _}) ->
+module({_, Module}) ->
    Module.
 
-export(SMC = {_, Module, _}) ->
-   {Module, call(SMC, export)}.
+export(SM = {_, Module}) ->
+   {exported_sm, Module, call(SM, export)}.
 
-export(SMC = {_, Module, _}, Tag) ->
-   {Module, call(SMC, export, Tag)}.
+export(SM = {_, Module}, Tag) ->
+   {exported_sm, Module, call(SM, export, Tag)}.
 
 wrap(Module, State) ->
-   {Module, State}.
+   {exported_sm, Module, State}.
 
-import({Module, ExportedState}) ->
+import({exported_sm, Module, ExportedState}) ->
    {
       spawn(fun() -> loop(Module, Module:import(ExportedState)) end),
-      Module,
-      self()
+      Module
    }.
 
-get_state({_Module, State}) -> State;     % for already exported state
-get_state(SMC) -> call(SMC, get_state).   % for a constructed/existing SM
+get_state({exported_sm, _, State}) -> State;    % for already exported state
+get_state(SM) -> call(SM, get_state).           % for a constructed/existing SM
 
 
-set_state({Module, _OldState}, NewState) -> {Module, NewState};
-set_state(SMC, NewState) -> call(SMC, set_state, NewState).
+set_state({exported_sm, Module, _}, NewState) -> {exported_sm, Module, NewState};
+set_state(SM, NewState) -> call(SM, set_state, NewState), SM.
 
 
 % is the passed in state machine a libdist replication or partitioning protocol?
@@ -100,14 +98,14 @@ is_rp_protocol(_) -> false.
 
 loop(Module, State) ->
    receive
-      {SMC = {_, _, C}, do, Ref, Client, Command, AllowSideEffects} ->
+      {Caller, do, Ref, Client, Command, AllowSideEffects} ->
          case Module:handle_cmd(State, Command, AllowSideEffects) of
             {reply, Reply} ->
                case AllowSideEffects of
                   true -> Client ! {Ref, Reply};
                   false -> do_nothing
                end,
-               C ! {SMC, done},
+               Caller ! done,
                loop(Module, State);
 
             {reply, Reply, NewState} ->
@@ -115,55 +113,55 @@ loop(Module, State) ->
                   true -> Client ! {Ref, Reply};
                   false -> do_nothing
                end,
-               C ! {SMC, done},
+               Caller ! done,
                loop(Module, NewState);
 
             {noreply, NewState} ->
-               C ! {SMC, done},
+               Caller ! done,
                loop(Module, NewState);
 
             noreply ->
-               C ! {SMC, done},
+               Caller ! done,
                loop(Module, State)
          end;
 
-      {SMC = {_, _, C}, do, Command, AllowSideEffects} ->
+      {Caller, do, Command, AllowSideEffects} ->
          case Module:handle_cmd(State, Command, AllowSideEffects) of
             {reply, Reply} ->
-               C ! {SMC, Reply},
+               Caller ! Reply,
                loop(Module, State);
 
             {reply, Reply, NewState} ->
-               C ! {SMC, Reply},
+               Caller ! Reply,
                loop(Module, NewState);
 
             {noreply, NewState} ->
-               C ! {SMC, done},
+               Caller ! done,
                loop(Module, NewState);
 
             noreply ->
-               C ! {SMC, done},
+               Caller ! done,
                loop(Module, State)
          end;
 
-      {SMC = {_, _, C}, stop, Reason} ->
+      {Caller, stop, Reason} ->
          Module:stop(State, Reason),
-         C ! {SMC, ok};
+         Caller ! ok;
 
-      {SMC = {_, _, C}, export} ->
-         C ! {SMC, Module:export(State)},
+      {Caller, export} ->
+         Caller ! Module:export(State),
          loop(Module, State);
 
-      {SMC = {_, _, C}, export, Tag} ->
-         C ! {SMC, Module:export(State, Tag)},
+      {Caller, export, Tag} ->
+         Caller ! Module:export(State, Tag),
          loop(Module, State);
 
-      {SMC = {_, _, C}, get_state} ->
-         C ! {SMC, State},
+      {Caller, get_state} ->
+         Caller ! State,
          loop(Module, State);
 
-      {SMC = {_, _, C}, set_state, NewState} ->
-         C ! {SMC, ok},
+      {Caller, set_state, NewState} ->
+         Caller ! ok,
          loop(Module, NewState)
    end.
 
@@ -171,26 +169,26 @@ loop(Module, State) ->
 % make a call to the SM server with 0,1,2,4 arguments
 -compile({inline, [call/2, call/3, call/4, call/6]}).
 
-call(SMC = {SM, _, _}, Tag) ->
-   SM ! {SMC, Tag},
+call({Server, _}, Tag) ->
+   Server ! {self(), Tag},
    receive
-      {SMC, Result} -> Result
+      Result -> Result
    end.
 
-call(SMC = {SM, _, _}, Tag, Arg1) ->
-   SM ! {SMC, Tag, Arg1},
+call({Server, _}, Tag, Arg1) ->
+   Server ! {self(), Tag, Arg1},
    receive
-      {SMC, Result} -> Result
+      Result -> Result
    end.
 
-call(SMC = {SM, _, _}, Tag, Arg1, Arg2) ->
-   SM ! {SMC, Tag, Arg1, Arg2},
+call({Server, _}, Tag, Arg1, Arg2) ->
+   Server ! {self(), Tag, Arg1, Arg2},
    receive
-      {SMC, Result} -> Result
+      Result -> Result
    end.
 
-call(SMC = {SM, _, _}, Tag, Arg1, Arg2, Arg3, Arg4) ->
-   SM ! {SMC, Tag, Arg1, Arg2, Arg3, Arg4},
+call({Server, _}, Tag, Arg1, Arg2, Arg3, Arg4) ->
+   Server ! {self(), Tag, Arg1, Arg2, Arg3, Arg4},
    receive
-      {SMC, Result} -> Result
+      Result -> Result
    end.
