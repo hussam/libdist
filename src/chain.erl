@@ -11,6 +11,7 @@
       export/1,
       export/2,
       update_state/3,
+      handle_failure/5,
       handle_msg/5
    ]).
 
@@ -93,6 +94,11 @@ update_state(Me, #conf{replicas = NewReps}, State) ->
       next = NewNext,
       previous = NewPrev
    }.
+
+
+% Handle the failure of a replica
+handle_failure(Me, NewConf, State, _FailedPid, _Info) ->
+   update_state(Me, NewConf, State).
 
 
 % Handle a queued message

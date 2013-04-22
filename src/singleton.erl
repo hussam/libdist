@@ -11,6 +11,7 @@
       export/1,
       export/2,
       update_state/3,
+      handle_failure/5,
       handle_msg/5
    ]).
 
@@ -36,6 +37,7 @@ import(_) -> [].
 export(_) -> [].
 export(_,_) -> [].
 update_state(_,_,_) -> [].
+handle_failure(_, _, _, _, _) -> [].
 
 % Handle a queued message
 handle_msg(_Me, Message, ASE = _AllowSideEffects, SM, _State) ->

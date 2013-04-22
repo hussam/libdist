@@ -18,7 +18,7 @@ start(Node, HandlerModule, InitArgs) ->
 % Receive Loop: buffer incoming messages until the worker process can take them.
 recv_loop(HandlerModule, InitArgs) ->
    Self = self(),
-   WorkerPID = spawn(fun() -> work_loop(Self, HandlerModule, InitArgs) end),
+   WorkerPID = spawn_link(fun() -> work_loop(Self, HandlerModule, InitArgs) end),
    recv_loop([], 0, WorkerPID, true).
 
 recv_loop(MsgStack, StackLen, WorkerPID, WorkerFree) ->
@@ -57,6 +57,11 @@ work_loop(RecvPID, Handler, State, MessageQ) ->
    receive
       {'$new_msgs', NewMsgs} ->
          NextQueue = merge_into_queue(KeptMsgs, NewMsgs),
+         work_loop(RecvPID, Handler, NewState, NextQueue);
+
+      % failure notifications are sent to worker loop automatically
+      {'DOWN', _, _, _, _} = Msg ->
+         NextQueue = merge_into_queue(KeptMsgs, [Msg]),
          work_loop(RecvPID, Handler, NewState, NextQueue)
    end.
 

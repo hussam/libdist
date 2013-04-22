@@ -11,6 +11,7 @@
       export/1,
       export/2,
       update_state/3,
+      handle_failure/5,
       handle_msg/5
    ]).
 
@@ -73,6 +74,20 @@ update_state(_Me, #conf{replicas = [Backend | Caches]}, State) ->
    State#cache_state{backend = Backend, caches = Caches}.
 
 
+% Handle the failure of a cache or a replica
+handle_failure(Me, NewConf, State=#cache_state{backend=Backend}, FailedPid, _Info) ->
+   case FailedPid of
+      Backend ->
+         % do not update the state. This will result in all write requests
+         % timing out sent to the backend timing out, and caches can still
+         % service read requests.
+         State;
+
+      _ ->  % when a cache replica fails, just remove it.
+         update_state(Me, NewConf, State)
+   end.
+
+
 % Handle a queued message
 handle_msg(Me, Message, ASE = _AllowSideEffects, SM, _State = #cache_state{
       local_store = LocalStore,
@@ -91,7 +106,7 @@ handle_msg(Me, Message, ASE = _AllowSideEffects, SM, _State = #cache_state{
          consume;
 
       % Handle a write command as a backend replica
-      {Ref, Client, RId, {write, Command}} ->
+      {Ref, Client, RId, {write, Command}} when Me == Backend ->
          ldsm:do(SM, Ref, Client, Command, ASE),
          [ ?SEND(C, RId, {invalidate, Command}, ASE) || C <- Caches ],
          consume;

@@ -11,6 +11,7 @@
       export/1,
       export/2,
       update_state/3,
+      handle_failure/5,
       handle_msg/5
    ]).
 
@@ -74,6 +75,10 @@ export(_, _) ->
 % Update the protocol's custom state (due to replacement or reconfiguration)
 update_state(_Me, _NewConf, _State) ->
    [].
+
+% Handle the failure of a shard
+handle_failure(_Me, _NewConf, State, {_FailedTag, _FailedPid}, _Info) ->
+   State.   % FIXME: implement this properly!
 
 % Handle a queued message
 handle_msg(_Me, Message, ASE = _AllowSideEffects, SM, _State) ->

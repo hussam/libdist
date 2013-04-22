@@ -50,6 +50,7 @@ behaviour_info(callbacks) ->
       {export, 1},
       {export, 2},
       {update_state, 3},
+      {handle_failure, 5},
       {handle_msg, 5}
    ];
 behaviour_info(_) ->
@@ -134,10 +135,51 @@ handle_msg(Me, Message, State) ->
 % Handle a queued message
 handle_msg(Me, Message, ASE = _AllowSideEffects, State = #state{
       sm = SM,
-      conf = Conf = #conf{type = ConfType, protocol = P},
+      conf = Conf = #conf{type = ConfType, protocol = P, version = ConfVn},
       pstate = PState
    }) ->
    case Message of
+      {'DOWN', _MonitorRef, process, FailedPid, Info} ->
+         % compute new configuration and the failed unit
+         {FailedUnit, NewConf} = case ConfType of
+            ?SINGLE ->
+               error(should_not_be_handling_failure_on_singleton);
+
+            ?REPL ->
+               Replicas = Conf#conf.replicas,
+               {FailedPid, Conf#conf{
+                  replicas = lists:delete(FailedPid, Replicas),
+                  version = ConfVn + 1
+               }};
+
+            ?PART ->
+               Partitions = Conf#conf.partitions,
+               FailedPartition = {_,_} = lists:keyfind(FailedPid, 2, Partitions),
+               {FailedPartition, Conf#conf{
+                  partitions = lists:keydelete(FailedPid, 2, Partitions),
+                  version = ConfVn + 1
+               }}
+         end,
+
+         % let the protocol update its state to respond to the failure
+         NewPState = P:handle_failure(Me, NewConf, PState, FailedUnit, Info),
+
+         case ldsm:is_rp_protocol(SM) of
+            false ->
+               do_nothing;
+
+            true ->
+               {NewSMState, _} = replace_replica(
+                  ldsm:get_state(SM), Conf, NewConf, true),
+               ldsm:set_state(SM, NewSMState)
+         end,
+
+         NewState = State#state{
+            conf = NewConf,
+            pstate = NewPState
+         },
+         {consume, NewState};
+
       % Change this replica's configuration
       % TODO: handle reconfiguration in nested protocols
       {Ref, Client, _RId, {reconfigure, NewConf}} ->
@@ -150,6 +192,15 @@ handle_msg(Me, Message, ASE = _AllowSideEffects, State = #state{
          ),
          case InNextConf of
             true ->
+               Others = case ConfType of
+                  ?SINGLE -> [];
+                  ?REPL -> lists:delete(Me, NewReplicas);
+                  ?PART -> lists:delete(Me, [Pid || {_, Pid} <- NewPartitions])
+               end,
+
+               % monitor peers in new configuration if they are processes
+               [ monitor(process, Peer) || Peer <- Others, is_pid(Peer) ],
+
                {consume, State#state{
                      conf = NewConf,
                      pstate = P:update_state(Me, NewConf, PState)

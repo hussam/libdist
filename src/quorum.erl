@@ -11,6 +11,7 @@
       export/1,
       export/2,
       update_state/3,
+      handle_failure/5,
       handle_msg/5
    ]).
 
@@ -97,6 +98,14 @@ update_state(Me, #conf{replicas = NewReps, args = QArgs}, State) ->
       w = W,
       others = shuffle(lists:delete(Me, NewReps))
    }.
+
+
+% Handle failure of a replica
+handle_failure(_Me, _NewConf, State, _FailedPid, _Info) ->
+   % Do not modify the state since this protocol masks failure.
+   % However, coordinator will still send messages to failed replicas according
+   % to its old state.
+   State.
 
 
 % Handle a queued message
