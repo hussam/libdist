@@ -86,8 +86,8 @@ set_state(SM, NewState) -> call(SM, set_state, NewState), SM.
 
 
 % is the passed in state machine a libdist replication or partitioning protocol?
-is_rp_protocol({_, replica, _}) -> true;
-is_rp_protocol({replica, _}) -> true;   % for exported state
+is_rp_protocol({_, replica}) -> true;
+is_rp_protocol({exported_sm, replica, _}) -> true;   % for exported state
 is_rp_protocol(_) -> false.
 
 
