@@ -140,45 +140,51 @@ handle_msg(Me, Message, ASE = _AllowSideEffects, State = #state{
    }) ->
    case Message of
       {'DOWN', _MonitorRef, process, FailedPid, Info} ->
-         % compute new configuration and the failed unit
-         {FailedUnit, NewConf} = case ConfType of
-            ?SINGLE ->
-               error(should_not_be_handling_failure_on_singleton);
-
-            ?REPL ->
-               Replicas = Conf#conf.replicas,
-               {FailedPid, Conf#conf{
-                  replicas = lists:delete(FailedPid, Replicas),
-                  version = ConfVn + 1
-               }};
-
-            ?PART ->
-               Partitions = Conf#conf.partitions,
-               FailedPartition = {_,_} = lists:keyfind(FailedPid, 2, Partitions),
-               {FailedPartition, Conf#conf{
-                  partitions = lists:keydelete(FailedPid, 2, Partitions),
-                  version = ConfVn + 1
-               }}
-         end,
-
-         % let the protocol update its state to respond to the failure
-         NewPState = P:handle_failure(Me, NewConf, PState, FailedUnit, Info),
-
-         case ldsm:is_rp_protocol(SM) of
+         case in_conf(FailedPid, Conf) of
             false ->
-               do_nothing;
+               consume;    % ignore
 
             true ->
-               {NewSMState, _} = replace_replica(
-                  ldsm:get_state(SM), Conf, NewConf, true),
-               ldsm:set_state(SM, NewSMState)
-         end,
+               % compute new configuration and the failed unit
+               {FailedUnit, NewConf} = case ConfType of
+                  ?SINGLE ->
+                     error(should_not_be_handling_failure_on_singleton);
 
-         NewState = State#state{
-            conf = NewConf,
-            pstate = NewPState
-         },
-         {consume, NewState};
+                  ?REPL ->
+                     Replicas = Conf#conf.replicas,
+                     {FailedPid, Conf#conf{
+                           replicas = lists:delete(FailedPid, Replicas),
+                           version = ConfVn + 1
+                        }};
+
+                  ?PART ->
+                     Partitions = Conf#conf.partitions,
+                     FailedPartition = {_,_} = lists:keyfind(FailedPid, 2, Partitions),
+                     {FailedPartition, Conf#conf{
+                           partitions = lists:keydelete(FailedPid, 2, Partitions),
+                           version = ConfVn + 1
+                        }}
+               end,
+
+               % let the protocol update its state to respond to the failure
+               NewPState = P:handle_failure(Me, NewConf, PState, FailedUnit, Info),
+
+               case ldsm:is_rp_protocol(SM) of
+                  false ->
+                     do_nothing;
+
+                  true ->
+                     {NewSMState, _} = replace_replica(
+                        ldsm:get_state(SM), Conf, NewConf, true),
+                     ldsm:set_state(SM, NewSMState)
+               end,
+
+               NewState = State#state{
+                  conf = NewConf,
+                  pstate = NewPState
+               },
+               {consume, NewState}
+         end;
 
       % Change this replica's configuration
       % TODO: handle reconfiguration in nested protocols
@@ -381,24 +387,35 @@ get_tags(#state{
 update_conf_members(OldConf = #conf{
       type = ConfType, version=Vn, replicas = Replicas, partitions = Partitions
    }, OldMember, NewMember) ->
-   case ConfType of
-      ?REPL ->
-         OldConf#conf{
-            version = Vn + 1,
-            replicas = libdist_utils:list_replace(OldMember, NewMember, Replicas)
-         };
+   case in_conf(OldMember, OldConf) of
+      false ->
+         OldConf;    % do nothing
 
-      ?PART ->
-         {Tag, _} = lists:keyfind(OldMember, 2, Partitions),
-         OldConf#conf{
-            version = Vn+1,
-            partitions = lists:keyreplace(
-               OldMember, 2, Partitions, {Tag, NewMember})
-         };
+      true ->
+         case ConfType of
+            ?REPL ->
+               OldConf#conf{
+                  version = Vn + 1,
+                  replicas = libdist_utils:list_replace(OldMember, NewMember, Replicas)
+               };
 
-      ?SINGLE ->
-         NewMember
-
+            ?PART ->
+               {Tag, _} = lists:keyfind(OldMember, 2, Partitions),
+               OldConf#conf{
+                  version = Vn+1,
+                  partitions = lists:keyreplace(
+                     OldMember, 2, Partitions, {Tag, NewMember})
+               };
+            ?SINGLE ->
+               NewMember
+         end
    end.
 
 
+% Test whether a process or PSM is a member of a given configuration
+in_conf(Elem, #conf{type=ConfType, replicas=Replicas, partitions=Partitions}) ->
+   case ConfType of
+      ?REPL -> lists:member(Elem, Replicas);
+      ?PART -> lists:keymember(Elem, 2, Partitions);
+      ?SINGLE -> Replicas == [Elem]
+   end.
