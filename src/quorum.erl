@@ -5,7 +5,7 @@
 -export([
       type/0,
       conf_args/1,
-      cast/3,
+      cast/2,
       init_replica/1,
       import/1,
       export/1,
@@ -40,7 +40,7 @@ conf_args(Args) -> Args.
 
 
 % Send an asynchronous command to a replicated object
-cast(#conf{replicas=Reps=[Hd | _], sm_mod=SMMod, args=QArgs}, RId, Command) ->
+cast(#conf{replicas=Reps=[Hd | _], sm_mod=SMMod, args=QArgs}, Command) ->
    Target = case proplists:get_bool(shuffle, QArgs) of
       true -> lists:nth(random:uniform(length(Reps)), Reps);
       false -> Hd
@@ -49,7 +49,7 @@ cast(#conf{replicas=Reps=[Hd | _], sm_mod=SMMod, args=QArgs}, RId, Command) ->
       true -> write;
       false -> read
    end,
-   libdist_utils:cast(Target, RId, {QName, Command}).
+   libdist_utils:cast(Target, {QName, Command}).
 
 
 % Initialize the state of a new replica
@@ -119,32 +119,32 @@ handle_msg(Me, Message, ASE = _AllowSideEffects, SM, State = #quorum_state{
    }) ->
    case Message of
       % Respond to a command as a member of a read quorum
-      {Ref, Coordinator, RId, read, Command} ->
+      {Ref, Coordinator, read, Command} ->
          Result = ldsm:do(SM, Command, false),
-         ?SEND(Coordinator, RId, {stabilized, Ref, UpdatesCount, Result}, ASE),
+         ?SEND(Coordinator, {stabilized, Ref, UpdatesCount, Result}, ASE),
          consume;
 
       % Respond to a command as a member of a write quorum
-      {Ref, Coordinator, RId, write, Command} ->
+      {Ref, Coordinator, write, Command} ->
          NewCount = UpdatesCount + 1,
          Result = ldsm:do(SM, Command, false),
-         ?SEND(Coordinator, RId, {stabilized, Ref, NewCount, Result}, ASE),
+         ?SEND(Coordinator, {stabilized, Ref, NewCount, Result}, ASE),
          {consume, State#quorum_state{updates_count = NewCount}};
 
       {stabilized, Ref, Count, Result} ->
-         [{Ref, RId, _, _, Client, Cmd, CurCount, CurResult}] =
+         [{Ref, _, _, Client, Cmd, CurCount, CurResult}] =
                                                       ets:lookup(Unstable, Ref),
          % Keep track of the result reflecting the most number of updates
          {MaxCount, MaxResult} = case Count > CurCount of
             true ->
-               ets:update_element(Unstable, Ref, [{7, Count}, {8, Result}]),
+               ets:update_element(Unstable, Ref, [{6, Count}, {7, Result}]),
                {Count, Result};
             false ->
                {CurCount, CurResult}
          end,
 
          % count response towards a quorum result by decrementing quorum count
-         Return = case ets:update_counter(Unstable, Ref, {3, -1}) of
+         Return = case ets:update_counter(Unstable, Ref, {2, -1}) of
             0 ->  % quorum reached
                % perform the command locally and reply with the max-count result
                MyResult = ldsm:do(SM, Cmd, ASE),
@@ -153,20 +153,20 @@ handle_msg(Me, Message, ASE = _AllowSideEffects, SM, State = #quorum_state{
                   true -> MyResult;
                   false -> MaxResult
                end,
-               ?SEND(Client, RId, {Ref, FinalResult}, ASE),
+               ?SEND(Client, {Ref, FinalResult}, ASE),
                {consume, State#quorum_state{updates_count = MyCount}};
             _ -> % quorum not reached
                consume
          end,
          % decrement total number of possible remaining responses (and clean up)
-         case ets:update_counter(Unstable, Ref, {4, -1}) of
+         case ets:update_counter(Unstable, Ref, {3, -1}) of
             0 -> ets:delete(Unstable, Ref);
             _ -> do_nothing
          end,
          Return;
 
       % Respond to a client command as a coordinator
-      {Ref, Client, RId, {QTag, Command}} ->
+      {Ref, Client, {QTag, Command}} ->
          {NextCount, QSize} = case QTag of
             read -> {UpdatesCount, R};
             write -> {UpdatesCount + 1, W}
@@ -176,9 +176,9 @@ handle_msg(Me, Message, ASE = _AllowSideEffects, SM, State = #quorum_state{
                ldsm:do(SM, Ref, Client, Command, ASE);
             _ ->
                ets:insert(Unstable,
-                  {Ref, RId, QSize-1, N-1, Client, Command, -1, []}),
-               Msg = {Ref, Me, RId, QTag, Command},
-               [ ?SEND(Replica, RId, Msg, ASE) || Replica <- Others ]
+                  {Ref, QSize-1, N-1, Client, Command, -1, []}),
+               Msg = {Ref, Me, QTag, Command},
+               [ ?SEND(Replica, Msg, ASE) || Replica <- Others ]
          end,
          {consume, State#quorum_state{updates_count = NextCount}};
 

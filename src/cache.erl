@@ -5,7 +5,7 @@
 -export([
       type/0,
       conf_args/1,
-      cast/3,
+      cast/2,
       init_replica/1,
       import/1,
       export/1,
@@ -39,12 +39,12 @@ conf_args(Args) -> Args.
 
 
 % Send an asynchronous command to a chain replicated object
-cast(#conf{replicas = [Head | Tail], sm_mod = SMModule}, RId, Command) ->
+cast(#conf{replicas = [Head | Tail], sm_mod = SMModule}, Command) ->
    {Tag, Target} = case SMModule:is_mutating(Command) of
       true -> {write, Head};
       false -> {read, lists:nth(random:uniform(length(Tail)), Tail)}
    end,
-   libdist_utils:cast(Target, RId, {Tag, Command}).
+   libdist_utils:cast(Target, {Tag, Command}).
 
 
 % Initialize the state of a new replica
@@ -96,26 +96,26 @@ handle_msg(Me, Message, ASE = _AllowSideEffects, SM, _State = #cache_state{
    }) ->
    case Message of
       % Handle a read command as a cache replica
-      {Ref, Client, RId, {read, Command}} ->
+      {Ref, Client, {read, Command}} ->
          case ets:lookup(LocalStore, Command) of
             [{_, Result}] ->     % cache hit
-               ?SEND(Client, RId, {Ref, Result}, ASE);
+               ?SEND(Client, {Ref, Result}, ASE);
             _ ->                 % cache miss
-               ?SEND(Backend, RId, {fwd, Ref, Client, RId, Command, Me}, ASE)
+               ?SEND(Backend, {fwd, Ref, Client, Command, Me}, ASE)
          end,
          consume;
 
       % Handle a write command as a backend replica
-      {Ref, Client, RId, {write, Command}} when Me == Backend ->
+      {Ref, Client, {write, Command}} when Me == Backend ->
          ldsm:do(SM, Ref, Client, Command, ASE),
-         [ ?SEND(C, RId, {invalidate, Command}, ASE) || C <- Caches ],
+         [ ?SEND(C, {invalidate, Command}, ASE) || C <- Caches ],
          consume;
 
       % Handle a command forwarded by a cache replica
-      {fwd, Ref, Client, RId, Command, CacheReplica} ->
+      {fwd, Ref, Client, Command, CacheReplica} ->
          Result = ldsm:do(SM, Command, ASE),
-         ?SEND(Client, RId, {Ref, Result}, ASE),
-         ?SEND(CacheReplica, RId, {cache_update, Command, Result}, ASE),
+         ?SEND(Client, {Ref, Result}, ASE),
+         ?SEND(CacheReplica, {cache_update, Command, Result}, ASE),
          consume;
 
       % Handle a cache update at a cache replica

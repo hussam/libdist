@@ -5,7 +5,7 @@
 -export([
       type/0,
       conf_args/1,
-      cast/3,
+      cast/2,
       init_replica/1,
       import/1,
       export/1,
@@ -43,12 +43,12 @@ conf_args(Args) -> Args.
 
 
 % Send an asynchronous command to a chain replicated object
-cast(#conf{replicas = Reps = [Head | _], sm_mod = SMModule}, RId, Command) ->
+cast(#conf{replicas = Reps = [Head | _], sm_mod = SMModule}, Command) ->
    {Tag, Target} = case SMModule:is_mutating(Command) of
       true -> {write, Head};
       false -> {read, lists:last(Reps)}
    end,
-   libdist_utils:cast(Target, RId, {Tag, Command}).
+   libdist_utils:cast(Target, {Tag, Command}).
 
 
 % Initialize the state of a new replica
@@ -113,18 +113,18 @@ handle_msg(_Me, Message, ASE = _AllowSideEffects, SM, State = #chain_state{
    }) ->
    case Message of
       % Handle command as the HEAD of the chain
-      {Ref, Client, RId, {write, Command}} when Prev == chain_head ->
+      {Ref, Client, {write, Command}} when Prev == chain_head ->
          CmdNum = {Tags, Counter},
-         FwdMsg = {CmdNum, Ref, Client, RId, Command},
+         FwdMsg = {CmdNum, Ref, Client, Command},
          ets:insert(Unstable, FwdMsg),
-         ?SEND(Next, RId, FwdMsg, ASE),
+         ?SEND(Next, FwdMsg, ASE),
          {consume, State#chain_state{counter = Counter + 1}};
 
       % Handle command as any replica in the MIDDLE of the chain
-      {CmdNum, _Ref, _Client, RId, _Cmd} when Next /= chain_tail ->
+      {CmdNum, _Ref, _Client, _Cmd} when Next /= chain_tail ->
          case libdist_utils:is_next_cmd(CmdNum, NextCmdNums) of
             {true, UpdatedNextCmdNums} ->
-               ?SEND(Next, RId, Message, ASE),
+               ?SEND(Next, Message, ASE),
                ets:insert(Unstable, Message),
                {consume, State#chain_state{next_cmd_nums = UpdatedNextCmdNums}};
             false ->
@@ -132,18 +132,18 @@ handle_msg(_Me, Message, ASE = _AllowSideEffects, SM, State = #chain_state{
          end;
 
       % Handle update command as the TAIL of the chain
-      {CmdNum, Ref, Client, RId, Command} ->
+      {CmdNum, Ref, Client, Command} ->
          case libdist_utils:is_next_cmd(CmdNum, NextCmdNums) of
             {true, UpdatedNextCmdNums} ->
                ldsm:do(SM, Ref, Client, Command, ASE),
-               ?SEND(Prev, RId, {stabilized, CmdNum}, ASE),
+               ?SEND(Prev, {stabilized, CmdNum}, ASE),
                {consume, State#chain_state{next_cmd_nums = UpdatedNextCmdNums}};
             false ->
                keep
          end;
 
       % Handle query command as the TAIL of the chain
-      {Ref, Client, _RId, {read, Command}} ->
+      {Ref, Client, {read, Command}} ->
          ldsm:do(SM, Ref, Client, Command, ASE),
          consume;
 
@@ -151,10 +151,10 @@ handle_msg(_Me, Message, ASE = _AllowSideEffects, SM, State = #chain_state{
          case libdist_utils:is_next_cmd(CmdNum, StableCounts) of
             {true, NewStableCounts} ->
                case ets:lookup(Unstable, CmdNum) of
-                  [{CmdNum, _, _, RId, Command}] ->
+                  [{CmdNum, _, _, Command}] ->
                      ldsm:do(SM, Command, false),
                      if
-                        Prev /= chain_head -> ?SEND(Prev, RId, Message, ASE);
+                        Prev /= chain_head -> ?SEND(Prev, Message, ASE);
                         true -> do_not_forward
                      end,
                      ets:delete(Unstable, CmdNum),

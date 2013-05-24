@@ -5,7 +5,7 @@
 -export([
       type/0,
       conf_args/1,
-      cast/3,
+      cast/2,
       init_replica/1,
       import/1,
       export/1,
@@ -42,7 +42,7 @@ conf_args(Args) -> Args.
 
 
 % Send an asynchronous command to a replicated object
-cast(#conf{replicas=Reps=[P | Bs], sm_mod=SMMod, args=Args}, RId, Command) ->
+cast(#conf{replicas=Reps=[P | Bs], sm_mod=SMMod, args=Args}, Command) ->
    {Target, Tag} = case SMMod:is_mutating(Command) of
       true ->
          {P, write};
@@ -59,7 +59,7 @@ cast(#conf{replicas=Reps=[P | Bs], sm_mod=SMMod, args=Args}, RId, Command) ->
                {P, read}
          end
    end,
-   libdist_utils:cast(Target, RId, {Tag, Command}).
+   libdist_utils:cast(Target, {Tag, Command}).
 
 
 % Initialize the state of a new replica
@@ -127,28 +127,27 @@ handle_msg(Me, Message, ASE = _AllowSideEffects, SM, State = #pb_state{
    }) ->
    case Message of
       % Handle command as a primary replica
-      {Ref, Client, RId, {write, Command}} when Role == primary ->
+      {Ref, Client, {write, Command}} when Role == primary ->
          CmdNum = {Tags, Counter},
          ets:insert(Unstable, {
                CmdNum,
                NumBackups,
                Ref,
                Client,
-               RId,
                Command
             }),
-         Msg = {CmdNum, Me, RId, Ref, Client, Command},
-         [ ?SEND(B, RId, Msg, ASE) || B <- Backups ],
+         Msg = {CmdNum, Me, Ref, Client, Command},
+         [ ?SEND(B, Msg, ASE) || B <- Backups ],
          {consume, State#pb_state{counter = Counter + 1}};
 
       % Handle command as a backup replica
-      {CmdNum, Primary, RId, Ref, Client, Cmd} ->
+      {CmdNum, Primary, Ref, Client, Cmd} ->
          case libdist_utils:is_next_cmd(CmdNum, NextCmdNums) of
             {true, UpdatedNextCmdNums} ->
                % adding command to unstable + num backups is useful in case of
                % promotion to primary due to failure recovery
                ets:insert(Unstable, {CmdNum, NumBackups, Ref, Client, Cmd}),
-               ?SEND(Primary, RId, {ack, CmdNum}, ASE),
+               ?SEND(Primary, {ack, CmdNum}, ASE),
                {consume, State#pb_state{next_cmd_nums = UpdatedNextCmdNums}};
             false ->
                keep
@@ -168,7 +167,7 @@ handle_msg(Me, Message, ASE = _AllowSideEffects, SM, State = #pb_state{
 
 
       % Handle query read-only command
-      {Ref, Client, _RId, {read, Command}} ->
+      {Ref, Client, {read, Command}} ->
          ldsm:do(SM, Ref, Client, Command, ASE),
          consume;
 
@@ -178,9 +177,9 @@ handle_msg(Me, Message, ASE = _AllowSideEffects, SM, State = #pb_state{
             {true, NewStableCounts} ->
                case ets:update_counter(Unstable, CmdNum, -1) of
                   0 ->
-                     [{_, 0, Ref, Client, RId, Cmd}] = ets:lookup(Unstable, CmdNum),
+                     [{_, 0, Ref, Client, Cmd}] = ets:lookup(Unstable, CmdNum),
                      ldsm:do(SM, Ref, Client, Cmd, ASE),
-                     [?SEND(B, RId, {stabilized, CmdNum}, ASE) || B <- Backups],
+                     [?SEND(B, {stabilized, CmdNum}, ASE) || B <- Backups],
                      ets:delete(Unstable, CmdNum),
                      {consume, State#pb_state{stable_counts = NewStableCounts}};
                   _ ->

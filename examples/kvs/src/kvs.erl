@@ -26,14 +26,14 @@
 
 % Bind a value to a key
 put(Conf, Key, Value) ->
-   case repobj:call(Conf, Key, {put, Key, Value}, ?TIMEOUT) of
+   case repobj:call(Conf, {put, Key, Value}, ?TIMEOUT) of
       {ok, Result} -> Result;
       Error -> Error
    end.
 
 % Get the value bound to a key
 get(Conf, Key) ->
-   case repobj:call(Conf, Key, {get, Key}, ?TIMEOUT) of
+   case repobj:call(Conf, {get, Key}, ?TIMEOUT) of
       {ok, Result} -> Result;
       Error -> Error
    end.
@@ -54,8 +54,8 @@ split(_, _) ->
 
 
 % Select the partition that can handle the given command
-route(Key, Partitions) ->
-   do_route(Key, Partitions).
+route({put, Key, _Value}, Partitions) -> do_route(Key, Partitions);
+route({get, Key}, Partitions) -> do_route(Key, Partitions).
 
 do_route(Key, []) ->
    error("could not route key to proper partition", Key);

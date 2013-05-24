@@ -44,7 +44,7 @@ behaviour_info(callbacks) ->
    [
       {type, 0},
       {conf_args, 1},
-      {cast, 3},
+      {cast, 2},
       {init_replica, 1},
       {import, 1},
       {export, 1},
@@ -78,7 +78,7 @@ handle_cmd(State = #state{me = Me}, Message, AllowSideEffects) ->
       _ -> noreply
    end.
 
-is_mutating({_Ref, _Client, _RId, {read, _Command}}) ->
+is_mutating({_Ref, _Client, {read, _Command}}) ->
    false;
 is_mutating(_) ->
    true.
@@ -188,7 +188,7 @@ handle_msg(Me, Message, ASE = _AllowSideEffects, State = #state{
 
       % Change this replica's configuration
       % TODO: handle reconfiguration in nested protocols
-      {Ref, Client, _RId, {reconfigure, NewConf}} ->
+      {Ref, Client, {reconfigure, NewConf}} ->
          Client ! {Ref, ok},
          #conf{replicas = NewReplicas, partitions = NewPartitions} = NewConf,
          InNextConf = (
@@ -217,7 +217,7 @@ handle_msg(Me, Message, ASE = _AllowSideEffects, State = #state{
          end;
 
       % update the configuration by replacing OldReplica with NewReplica.
-      {Ref, Client, _RId, {replace, Me, NewConf}} ->
+      {Ref, Client, {replace, Me, NewConf}} ->
          % update configuration trees locally and notify others
          ExportedState = State#state{sm = ldsm:export(SM)},
          {_, NewRootConf} = replace_replica(ExportedState, Me, NewConf, true),
@@ -236,16 +236,16 @@ handle_msg(Me, Message, ASE = _AllowSideEffects, State = #state{
          {consume, NewState};
 
       % Stop this replica
-      {Ref, Client, _RId, {stop, Reason}} ->
+      {Ref, Client, {stop, Reason}} ->
          Client ! {Ref, ldsm:stop(SM, Reason)},
          {stop, Reason};
 
       % Return the configuration at this replica
-      {Ref, Client, _RId, get_conf} ->
+      {Ref, Client, get_conf} ->
          Client ! {Ref, Conf},
          consume;
 
-      {Ref, Client, _RId, {inherit_sm, Pid, Coverage, Retry}} ->
+      {Ref, Client, {inherit_sm, Pid, Coverage, Retry}} ->
          PidSM = libdist_utils:call(Pid, {get_sm, Coverage}, Retry),
          PidSMState = ldsm:get_state(PidSM),
          {NewSMState, NewRootConf} = replace_replica(PidSMState, Pid, Conf, false),
@@ -254,7 +254,7 @@ handle_msg(Me, Message, ASE = _AllowSideEffects, State = #state{
          {consume, State#state{sm = NewSM}};
 
       % Return the state machine's module
-      {Ref, Client, _RId, get_sm_module} ->
+      {Ref, Client, get_sm_module} ->
          case ConfType of
             ?SINGLE -> Client ! {Ref, ldsm:module(SM)};  %do not nest singletons
             _ -> Client ! {Ref, ?MODULE}
@@ -262,12 +262,12 @@ handle_msg(Me, Message, ASE = _AllowSideEffects, State = #state{
          consume;
 
       % Added for debugging purposes only
-      {Ref, Client, RId, get_sm} ->
-         handle_msg(Me, {Ref, Client, RId, {get_sm, all}}, ASE, State);
+      {Ref, Client, get_sm} ->
+         handle_msg(Me, {Ref, Client, {get_sm, all}}, ASE, State);
 
       % Return the state machine's state
       % TODO: change this into some sort of background state transfer
-      {Ref, Client, _RId, {get_sm, Coverage}} ->
+      {Ref, Client, {get_sm, Coverage}} ->
          case {ConfType, Coverage} of
             % no need to nest protocols under singletons (performance)
             {?SINGLE, all} ->
@@ -281,7 +281,7 @@ handle_msg(Me, Message, ASE = _AllowSideEffects, State = #state{
          end,
          consume;
 
-      {Ref, Client, _RId, get_tags} ->
+      {Ref, Client, get_tags} ->
          Client ! {Ref, get_tags(State#state{sm = ldsm:export(SM)}, [])},
          consume;
 
@@ -334,7 +334,7 @@ replace_replica(State = #state{
             ?PART ->
                [Partition || {_,Partition} <- lists:keydelete(Me, 2, Partitions)]
          end,
-         [ ?SEND(X, ?ALL, {replace, Me, NewReplica}, DoNotify) || X <- Others ],
+         [ ?SEND(X, {replace, Me, NewReplica}, DoNotify) || X <- Others ],
 
          % modify the configuration with the new list of replicas or partitions
          NewConf = update_conf_members(Conf, OldReplica, NewReplica),

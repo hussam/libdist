@@ -5,9 +5,7 @@
       new/4,
       inherit/4,
       cast/2,
-      cast/3,
       call/3,
-      call/4,
       reconfigure/3
    ]).
 
@@ -38,19 +36,13 @@ inherit(Pid, PSettings = {PModule, _}, Nodes, Timeout) ->
 
 
 % Send an asynchronous command to a replicated object
-cast(Conf, Command) ->
-   cast(Conf, ?ALL, Command).
-
-cast(Conf=#conf{protocol = P}, CRId, Command) ->
-   P:cast(Conf, CRId, Command).
+cast(Conf=#conf{protocol = P}, Command) ->
+   P:cast(Conf, Command).
 
 
 % Send a synchronous command to a replicated object
-call(Conf, Command, Timeout) ->
-   call(Conf, ?ALL, Command, Timeout).
-
-call(Conf = #conf{protocol = P}, CRId, Command, Timeout) ->
-   libdist_utils:collect(P:cast(Conf, CRId, Command), Timeout).
+call(Conf = #conf{protocol = P}, Command, Timeout) ->
+   libdist_utils:collect(P:cast(Conf, Command), Timeout).
 
 
 % Reconfigure the replicated object

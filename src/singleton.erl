@@ -5,7 +5,7 @@
 -export([
       type/0,
       conf_args/1,
-      cast/3,
+      cast/2,
       init_replica/1,
       import/1,
       export/1,
@@ -28,8 +28,8 @@ type() -> ?SINGLE.
 conf_args(Args) -> Args.
 
 % Send an asynchronous command to a singleton configuration
-cast(#conf{replicas = [Pid]}, RId, Command) ->
-   libdist_utils:cast(Pid, RId, {command, Command}).
+cast(#conf{replicas = [Pid]}, Command) ->
+   libdist_utils:cast(Pid, {command, Command}).
 
 % There is no singleton-specific state, so all these functions are meaningless
 init_replica(_) -> [].
@@ -43,7 +43,7 @@ handle_failure(_, _, _, _, _) -> [].
 handle_msg(_Me, Message, ASE = _AllowSideEffects, SM, _State) ->
    case Message of
       % Handle a command for the core state machine
-      {Ref, Client, _RId, {command, Command}} ->
+      {Ref, Client, {command, Command}} ->
          ldsm:do(SM, Ref, Client, Command, ASE),
          consume;
       _ ->

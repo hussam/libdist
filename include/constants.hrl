@@ -1,4 +1,3 @@
 -define(SINGLE, singleton).
 -define(REPL, rsm).
 -define(PART, psm).
--define(ALL, all_partitions).
