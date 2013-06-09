@@ -227,7 +227,7 @@ handle_msg(Me, Message, ASE = _AllowSideEffects, State = #state{
 
       % update the configuration by replacing OldReplica with NewReplica
       {replace, OldReplica, NewReplica} ->
-         NewConf = update_conf_members(Conf, OldReplica, NewReplica),
+         NewConf = replace_conf_member(Conf, OldReplica, NewReplica),
          % return the updated state
          NewState = State#state{
             conf = NewConf,
@@ -337,7 +337,7 @@ replace_replica(State = #state{
          [ ?SEND(X, {replace, Me, NewReplica}, DoNotify) || X <- Others ],
 
          % modify the configuration with the new list of replicas or partitions
-         NewConf = update_conf_members(Conf, OldReplica, NewReplica),
+         NewConf = replace_conf_member(Conf, OldReplica, NewReplica),
 
          % update higher levels of the RP-Tree if they exist
          {NewSMState, NewRootConf} = replace_replica(
@@ -384,31 +384,25 @@ get_tags(#state{
 
 % Create a new configuration based on OldConf where OldMember is replaced by
 % NewMember and all other settings (except the version number) stay the same
-update_conf_members(OldConf = #conf{
+replace_conf_member(OldConf = #conf{
       type = ConfType, version=Vn, replicas = Replicas, partitions = Partitions
    }, OldMember, NewMember) ->
-   case in_conf(OldMember, OldConf) of
-      false ->
-         OldConf;    % do nothing
+   case ConfType of
+      ?REPL ->
+         OldConf#conf{
+            version = Vn + 1,
+            replicas = libdist_utils:list_replace(OldMember, NewMember, Replicas)
+         };
 
-      true ->
-         case ConfType of
-            ?REPL ->
-               OldConf#conf{
-                  version = Vn + 1,
-                  replicas = libdist_utils:list_replace(OldMember, NewMember, Replicas)
-               };
-
-            ?PART ->
-               {Tag, _} = lists:keyfind(OldMember, 2, Partitions),
-               OldConf#conf{
-                  version = Vn+1,
-                  partitions = lists:keyreplace(
-                     OldMember, 2, Partitions, {Tag, NewMember})
-               };
-            ?SINGLE ->
-               NewMember
-         end
+      ?PART ->
+         {Tag, _} = lists:keyfind(OldMember, 2, Partitions),
+         OldConf#conf{
+            version = Vn+1,
+            partitions = lists:keyreplace(
+               OldMember, 2, Partitions, {Tag, NewMember})
+         };
+      ?SINGLE ->
+         NewMember
    end.
 
 
