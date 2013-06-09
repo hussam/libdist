@@ -29,6 +29,17 @@
    }).
 
 
+-record(pending_op, {      % pending operation at the coordinator
+      ref,
+      client,
+      command,
+      rem_responses,
+      rem_replicas,
+      max_count = -1,
+      max_result = []
+   }).
+
+
 %%%%%%%%%%%%%%%%%%%%%
 % Replica Callbacks %
 %%%%%%%%%%%%%%%%%%%%%
@@ -55,13 +66,13 @@ cast(#conf{replicas=Reps=[Hd | _], sm_mod=SMMod, args=QArgs}, Command) ->
 % Initialize the state of a new replica
 init_replica(_Me) ->
    #quorum_state{
-      unstable = ets:new(unstable_commands, [])
+      unstable = ets:new(unstable_commands, [{keypos, 2}])
    }.
 
 
 % Import a previously exported quorum state
 import(ExportedState = #quorum_state{unstable = UnstableList}) ->
-   Unstable = ets:new(unstable_commands, []),
+   Unstable = ets:new(unstable_commands, [{keypos, 2}]),
    ets:insert(Unstable, UnstableList),
    ExportedState#quorum_state{
       unstable = Unstable
@@ -132,19 +143,38 @@ handle_msg(Me, Message, ASE = _AllowSideEffects, SM, State = #quorum_state{
          {consume, State#quorum_state{updates_count = NewCount}};
 
       {stabilized, Ref, Count, Result} ->
-         [{Ref, _, _, Client, Cmd, CurCount, CurResult}] =
-                                                      ets:lookup(Unstable, Ref),
+         [Op] = ets:lookup(Unstable, Ref),
+
+         #pending_op{
+            ref = Ref,
+            client = Client,
+            command = Cmd,
+            rem_responses = RemResponses,
+            rem_replicas = RemReplicas,
+            max_count = CurCount,
+            max_result = CurResult
+         } = Op,
+
          % Keep track of the result reflecting the most number of updates
          {MaxCount, MaxResult} = case Count > CurCount of
-            true ->
-               ets:update_element(Unstable, Ref, [{6, Count}, {7, Result}]),
-               {Count, Result};
-            false ->
-               {CurCount, CurResult}
+            true -> {Count, Result};
+            false -> {CurCount, CurResult}
          end,
 
-         % count response towards a quorum result by decrementing quorum count
-         Return = case ets:update_counter(Unstable, Ref, {2, -1}) of
+         % Update the pending operation record
+         UpdatedOp = Op#pending_op{
+            rem_responses = RemResponses - 1,
+            rem_replicas = RemReplicas - 1,
+            max_count = MaxCount,
+            max_result = MaxResult
+         },
+         case RemReplicas - 1 of
+            0 -> ets:delete(Unstable, Ref);
+            _ -> ets:insert(Unstable, UpdatedOp)
+         end,
+
+         % Respond to command if quorum is reached
+         case RemResponses - 1 of
             0 ->  % quorum reached
                % perform the command locally and reply with the max-count result
                MyResult = ldsm:do(SM, Cmd, ASE),
@@ -155,15 +185,11 @@ handle_msg(Me, Message, ASE = _AllowSideEffects, SM, State = #quorum_state{
                end,
                ?SEND(Client, {Ref, FinalResult}, ASE),
                {consume, State#quorum_state{updates_count = MyCount}};
+
             _ -> % quorum not reached
                consume
-         end,
-         % decrement total number of possible remaining responses (and clean up)
-         case ets:update_counter(Unstable, Ref, {3, -1}) of
-            0 -> ets:delete(Unstable, Ref);
-            _ -> do_nothing
-         end,
-         Return;
+         end;
+
 
       % Respond to a client command as a coordinator
       {Ref, Client, {QTag, Command}} ->
@@ -176,7 +202,13 @@ handle_msg(Me, Message, ASE = _AllowSideEffects, SM, State = #quorum_state{
                ldsm:do(SM, Ref, Client, Command, ASE);
             _ ->
                ets:insert(Unstable,
-                  {Ref, QSize-1, N-1, Client, Command, -1, []}),
+                  #pending_op{
+                     ref = Ref,
+                     rem_responses = QSize - 1,
+                     rem_replicas = N - 1,
+                     client = Client,
+                     command = Command
+                  }),
                Msg = {Ref, Me, QTag, Command},
                [ ?SEND(Replica, Msg, ASE) || Replica <- Others ]
          end,
