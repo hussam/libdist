@@ -137,9 +137,7 @@ collectall({Ref, Pids}, Timeout) ->
 
 
 % send synchronous request to a process
-call(Conf = #conf{protocol = P}, Request, Retry) ->
-   P:call(Conf, Request, Retry);
-call(Pid, Request, Retry) ->
+call(Pid, Request, Retry) when is_pid(Pid) ->
    call(Pid, make_ref(), Request, Retry).
 
 
