@@ -104,6 +104,7 @@ import(KVList) ->
 
 % Stop the state machine
 stop(_, _Reason) ->
+   io:format("Stopping KVS with reason ~p\n", [_Reason]),
    ok.      % no actual cleanup needed here
 
 
