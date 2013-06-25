@@ -9,7 +9,6 @@
       init_replica/1,
       import/1,
       export/1,
-      export/2,
       update_state/3,
       handle_failure/5,
       handle_msg/5
@@ -18,8 +17,6 @@
 -include("constants.hrl").
 -include("helper_macros.hrl").
 -include("libdist.hrl").
-
--define(HEAD, '$shard_head').
 
 
 %%%%%%%%%%%%%%%%%%%%%
@@ -47,10 +44,6 @@ import(_) ->
 
 % Export a shard state
 export(_) ->
-   [].
-
-% Export part of a shard's state
-export(_, _) ->
    [].
 
 % Update the protocol's custom state (due to replacement or reconfiguration)

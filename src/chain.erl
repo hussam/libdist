@@ -9,7 +9,6 @@
       init_replica/1,
       import/1,
       export/1,
-      export/2,
       update_state/3,
       handle_failure/5,
       handle_msg/5
@@ -24,10 +23,8 @@
       previous,
       next,
       unstable,
-      tags = [],
-      counter = 0,
-      next_cmd_nums = dict:from_list([ {[], 0} ]),
-      stable_counts = dict:from_list([ {[], 0} ])
+      stable_count = 0,
+      next_cmd_num = 0
    }).
 
 -define(KEYPOS, 1).
@@ -59,32 +56,19 @@ init_replica(_Me) ->
 
 
 % Import a previously exported chain state
-import(ExportedState = #chain_state{
-      unstable = UnstableList,
-      stable_counts = StableCountsList,
-      next_cmd_nums = NextCmdNumsList
-   }) ->
+import(ExportedState = #chain_state{ unstable = UnstableList }) ->
    Unstable = ets:new(unstable_commands, [{keypos, ?KEYPOS}]),
    ets:insert(Unstable, UnstableList),
    ExportedState#chain_state{
-      unstable = Unstable,
-      stable_counts = dict:from_list(StableCountsList),
-      next_cmd_nums = dict:from_list(NextCmdNumsList)
+      unstable = Unstable
    }.
 
 
 % Export a chain replica state
-export(State=#chain_state{unstable=U, stable_counts=SC, next_cmd_nums=NCN}) ->
+export(State = #chain_state{unstable = Unstable}) ->
    State#chain_state{
-      unstable = ets:tab2list(U),
-      stable_counts = dict:to_list(SC),
-      next_cmd_nums = dict:to_list(NCN)
+      unstable = ets:tab2list(Unstable)
    }.
-
-% Export part of a chain replica's state
-export(State = #chain_state{tags = OldTags}, NewTag) ->
-   % TODO: implement this properly!!
-   export(State#chain_state{tags = [NewTag | OldTags]}).
 
 
 % Update the protocol's custom state (due to replacement or reconfiguration)
@@ -106,67 +90,44 @@ handle_msg(_Me, Message, ASE = _AllowSideEffects, SM, State = #chain_state{
       previous = Prev,
       next = Next,
       unstable = Unstable,
-      tags = Tags,
-      counter = Counter,
-      stable_counts = StableCounts,
-      next_cmd_nums = NextCmdNums
+      stable_count = StableCount,
+      next_cmd_num = NextCmdNum
    }) ->
    case Message of
       % Handle command as the HEAD of the chain
       {Ref, Client, {write, Command}} when Prev == chain_head ->
-         CmdNum = {Tags, Counter},
-         FwdMsg = {CmdNum, Ref, Client, Command},
+         FwdMsg = {NextCmdNum, Ref, Client, Command},
          ets:insert(Unstable, FwdMsg),
          ?SEND(Next, FwdMsg, ASE),
-         {consume, State#chain_state{counter = Counter + 1}};
+         {consume, State#chain_state{next_cmd_num = NextCmdNum+ 1}};
 
       % Handle command as any replica in the MIDDLE of the chain
-      {CmdNum, _Ref, _Client, _Cmd} when Next /= chain_tail ->
-         case libdist_utils:is_next_cmd(CmdNum, NextCmdNums) of
-            {true, UpdatedNextCmdNums} ->
-               ?SEND(Next, Message, ASE),
-               ets:insert(Unstable, Message),
-               {consume, State#chain_state{next_cmd_nums = UpdatedNextCmdNums}};
-            false ->
-               keep
-         end;
+      {NextCmdNum, _Ref, _Client, _Cmd} when Next /= chain_tail ->
+         ?SEND(Next, Message, ASE),
+         ets:insert(Unstable, Message),
+         {consume, State#chain_state{next_cmd_num = NextCmdNum + 1}};
 
       % Handle update command as the TAIL of the chain
-      {CmdNum, Ref, Client, Command} ->
-         case libdist_utils:is_next_cmd(CmdNum, NextCmdNums) of
-            {true, UpdatedNextCmdNums} ->
-               ldsm:do(SM, Ref, Client, Command, ASE),
-               ?SEND(Prev, {stabilized, CmdNum}, ASE),
-               {consume, State#chain_state{next_cmd_nums = UpdatedNextCmdNums}};
-            false ->
-               keep
-         end;
+      {NextCmdNum, Ref, Client, Command} ->
+         ldsm:do(SM, Ref, Client, Command, ASE),
+         ?SEND(Prev, {stabilized, NextCmdNum}, ASE),
+         C = NextCmdNum + 1,
+         {consume, State#chain_state{next_cmd_num = C, stable_count = C}};
 
       % Handle query command as the TAIL of the chain
       {Ref, Client, {read, Command}} ->
          ldsm:do(SM, Ref, Client, Command, ASE),
          consume;
 
-      {stabilized, CmdNum} ->
-         case libdist_utils:is_next_cmd(CmdNum, StableCounts) of
-            {true, NewStableCounts} ->
-               case ets:lookup(Unstable, CmdNum) of
-                  [{CmdNum, _, _, Command}] ->
-                     ldsm:do(SM, Command, false),
-                     if
-                        Prev /= chain_head -> ?SEND(Prev, Message, ASE);
-                        true -> do_not_forward
-                     end,
-                     ets:delete(Unstable, CmdNum),
-                     {consume, State#chain_state{stable_counts = NewStableCounts}};
-                  [] ->
-                     % XXX: this is a temporary fix for partitioned state
-                     % machines. Must find a real fix soon. FIXME!!!
-                     keep     % ignore it
-               end;
-            false ->
-               keep
-         end;
+      {stabilized, StableCount} ->
+         [{StableCount, _, _, Command}] = ets:lookup(Unstable, StableCount),
+         ldsm:do(SM, Command, false),
+         if
+            Prev /= chain_head -> ?SEND(Prev, Message, ASE);
+            true -> do_not_forward
+         end,
+         ets:delete(Unstable, StableCount),
+         {consume, State#chain_state{stable_count = StableCount + 1}};
 
       _ ->
          no_match

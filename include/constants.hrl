@@ -1,3 +1,4 @@
 -define(SINGLE, singleton).
 -define(REPL, rsm).
 -define(PART, psm).
+-define(NoSA, no_sa).

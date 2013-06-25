@@ -9,7 +9,6 @@
       init_replica/1,
       import/1,
       export/1,
-      export/2,
       update_state/3,
       handle_failure/5,
       handle_msg/5
@@ -24,10 +23,8 @@
       backups = [],
       num_backups = 0,
       unstable,
-      tags = [],
-      counter = 0,
-      stable_counts = dict:from_list([ {[], 0} ]),
-      next_cmd_nums = dict:from_list([ {[], 0} ])
+      stable_count = 0,
+      next_cmd_num = 0
    }).
 
 
@@ -79,17 +76,10 @@ import(ExportedState = #pb_state{unstable = UnstableList}) ->
 
 
 % Export a primary-backup replica state
-export(State=#pb_state{unstable=U, stable_counts=SC, next_cmd_nums=NCN}) ->
+export(State = #pb_state{unstable = Unstable}) ->
    State#pb_state{
-      unstable = ets:tab2list(U),
-      stable_counts = dict:to_list(SC),
-      next_cmd_nums = dict:to_list(NCN)
+      unstable = ets:tab2list(Unstable)
    }.
-
-% Export part of a primary-backup replica's state
-export(State = #pb_state{tags = OldTags}, NewTag) ->
-   % TODO: implement this properly!!
-   export(State#pb_state{tags = [NewTag | OldTags]}).
 
 
 % Update the protocol's custom state (due to replacement or reconfiguration)
@@ -120,51 +110,37 @@ handle_msg(Me, Message, ASE = _AllowSideEffects, SM, State = #pb_state{
       role = Role,
       backups = Backups, num_backups = NumBackups,
       unstable = Unstable,
-      tags = Tags,
-      counter = Counter,
-      stable_counts = StableCounts,
-      next_cmd_nums = NextCmdNums
+      stable_count = StableCount,
+      next_cmd_num = NextCmdNum
    }) ->
    case Message of
       % Handle command as a primary replica
       {Ref, Client, {write, Command}} when Role == primary ->
-         CmdNum = {Tags, Counter},
          ets:insert(Unstable, {
-               CmdNum,
+               NextCmdNum,
                NumBackups,
                Ref,
                Client,
                Command
             }),
-         Msg = {CmdNum, Me, Ref, Client, Command},
+         Msg = {NextCmdNum, Me, Ref, Client, Command},
          [ ?SEND(B, Msg, ASE) || B <- Backups ],
-         {consume, State#pb_state{counter = Counter + 1}};
+         {consume, State#pb_state{next_cmd_num = NextCmdNum + 1}};
 
       % Handle command as a backup replica
-      {CmdNum, Primary, Ref, Client, Cmd} ->
-         case libdist_utils:is_next_cmd(CmdNum, NextCmdNums) of
-            {true, UpdatedNextCmdNums} ->
-               % adding command to unstable + num backups is useful in case of
-               % promotion to primary due to failure recovery
-               ets:insert(Unstable, {CmdNum, NumBackups, Ref, Client, Cmd}),
-               ?SEND(Primary, {ack, CmdNum}, ASE),
-               {consume, State#pb_state{next_cmd_nums = UpdatedNextCmdNums}};
-            false ->
-               keep
-         end;
+      {NextCmdNum, Primary, Ref, Client, Cmd} ->
+         % adding command to unstable + num backups is useful in case of
+         % promotion to primary due to failure recovery
+         ets:insert(Unstable, {NextCmdNum, NumBackups, Ref, Client, Cmd}),
+         ?SEND(Primary, {ack, NextCmdNum}, ASE),
+         {consume, State#pb_state{next_cmd_num = NextCmdNum + 1}};
 
       % Handle stabilizing a write command at a backup replica
-      {stabilized, CmdNum} ->
-         case libdist_utils:is_next_cmd(CmdNum, StableCounts) of
-            {true, NewStableCounts} ->
-               [{CmdNum, _, _, _, Command}] = ets:lookup(Unstable, CmdNum),
-               ldsm:do(SM, Command, false),
-               ets:delete(Unstable, CmdNum),
-               {consume, State#pb_state{stable_counts = NewStableCounts}};
-            false ->
-               keep
-         end;
-
+      {stabilized, StableCount} ->
+         [{StableCount, _, _, _, Command}] = ets:lookup(Unstable, StableCount),
+         ldsm:do(SM, Command, false),
+         ets:delete(Unstable, StableCount),
+         {consume, State#pb_state{stable_count = StableCount + 1}};
 
       % Handle query read-only command
       {Ref, Client, {read, Command}} ->
@@ -172,21 +148,16 @@ handle_msg(Me, Message, ASE = _AllowSideEffects, SM, State = #pb_state{
          consume;
 
       % Handle acknowledgment of receipt of a write command from a backup
-      {ack, CmdNum} ->
-         case libdist_utils:is_next_cmd(CmdNum, StableCounts) of
-            {true, NewStableCounts} ->
-               case ets:update_counter(Unstable, CmdNum, -1) of
-                  0 ->
-                     [{_, 0, Ref, Client, Cmd}] = ets:lookup(Unstable, CmdNum),
-                     ldsm:do(SM, Ref, Client, Cmd, ASE),
-                     [?SEND(B, {stabilized, CmdNum}, ASE) || B <- Backups],
-                     ets:delete(Unstable, CmdNum),
-                     {consume, State#pb_state{stable_counts = NewStableCounts}};
-                  _ ->
-                     {consume, State}
-               end;
-            false ->
-               keep
+      {ack, StableCount} ->
+         case ets:update_counter(Unstable, StableCount, -1) of
+            0 ->
+               [{_, 0, Ref, Client, Cmd}] = ets:lookup(Unstable, StableCount),
+               ldsm:do(SM, Ref, Client, Cmd, ASE),
+               [?SEND(B, {stabilized, StableCount}, ASE) || B <- Backups],
+               ets:delete(Unstable, StableCount),
+               {consume, State#pb_state{stable_count = StableCount + 1}};
+            _ ->
+               {consume, State}
          end;
 
       _ ->

@@ -9,7 +9,6 @@
       init_replica/1,
       import/1,
       export/1,
-      export/2,
       update_state/3,
       handle_failure/5,
       handle_msg/5
@@ -35,7 +34,6 @@ cast(#conf{replicas = [Pid]}, Command) ->
 init_replica(_) -> [].
 import(_) -> [].
 export(_) -> [].
-export(_,_) -> [].
 update_state(_,_,_) -> [].
 handle_failure(_, _, _, _, _) -> [].
 

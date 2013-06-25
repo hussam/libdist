@@ -13,6 +13,7 @@
          chain,
          primary_backup,
          quorum,
+         shard_agent,
          shard,
          cache
          ]},

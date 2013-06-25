@@ -32,11 +32,7 @@ replicate(OldPid, Protocol, Args, Nodes) when is_pid(OldPid) ->
 
 do_replicate(OldPid, Protocol, Args, Nodes) ->
    % create a replicated state machine in place of the OldPid
-   {ok, Conf=#conf{replicas=NewPids}} = repobj:inherit(
-      OldPid, {Protocol, Args}, Nodes, ?TO),
-   % let the new replicas inherit the state machine of the old one. This also
-   % results in replacing OldPid in each NewPid's local RP-Tree with Conf
-   libdist_utils:multicall(NewPids, {inherit_sm, OldPid, all, ?TO}, ?TO),
+   {ok, Conf} = repobj:inherit( OldPid, {Protocol, Args}, Nodes, ?TO),
    % replace the old process with the new configuration in the RP-Tree
    {Conf, libdist_utils:call(OldPid, {replace, OldPid, Conf}, ?TO)}.
 
@@ -48,14 +44,8 @@ partition(OldPid, Protocol, Args, RouteFn, SplitFn) when is_pid(OldPid) ->
 do_partition(OldPid, Protocol, Args, RouteFn, SplitFn) ->
    % get the tags currently associated with the process
    OldTags = libdist_utils:call(OldPid, get_tags, ?TO),
-   {ok, Conf=#conf{partitions=NewPartitions}} = repobj:inherit(
+   {ok, Conf} = repobj:inherit(
          OldPid, {Protocol, {RouteFn, Args}}, SplitFn(OldTags), ?TO),
-   % let processes inherit their own of the old process's state. This also
-   % results in replacing OldPid in each NewPid's local RP-Tree with Conf
-   [
-      libdist_utils:call(Pid, {inherit_sm, OldPid, {part, Tag}, ?TO}, ?TO) ||
-      {Tag, Pid} <- NewPartitions
-   ],
    % replace the old process with the new configuration in the RP-Tree
    {Conf, libdist_utils:call(OldPid, {replace, OldPid, Conf}, ?TO)}.
 

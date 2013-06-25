@@ -9,7 +9,6 @@
       init_replica/1,
       import/1,
       export/1,
-      export/2,
       update_state/3,
       handle_failure/5,
       handle_msg/5
@@ -84,12 +83,6 @@ export(State = #quorum_state{unstable = Unstable}) ->
    State#quorum_state{
       unstable = ets:tab2list(Unstable)
    }.
-
-
-% Export part of a chain replica's state
-export(State, _Tag) ->
-   % TODO: filter unstable requests that are selected by 'Tag'
-   export(State).
 
 
 % Update the protocol's custom state (due to replacement or reconfiguration)

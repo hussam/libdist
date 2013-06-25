@@ -48,7 +48,6 @@ behaviour_info(callbacks) ->
       {init_replica, 1},
       {import, 1},
       {export, 1},
-      {export, 2},
       {update_state, 3},
       {handle_failure, 5},
       {handle_msg, 5}
@@ -68,8 +67,11 @@ new(Protocol, no_sm, Node) ->
 % State Machine Callbacks %
 %%%%%%%%%%%%%%%%%%%%%%%%%%%
 
+% Replicas implement the state machine (ldsm) interface only so that they can be
+% nested within one another. Replicas are nested by letting an existing replica
+% process import the wrapped exported state of another replica process.
 
-init_sm(_) ->
+init_sm(_) ->  % not used; nested replica ldsms are created via wrap() not new()
    exit({not_implemented, "init_sm not meaningful for the replica module."}).
 
 handle_cmd(State = #state{me = Me}, Message, AllowSideEffects) ->
@@ -95,7 +97,7 @@ export(State = #state{sm = SM, conf=#conf{protocol=P}, pstate = PState}) ->
 export(State = #state{sm = SM, conf=#conf{protocol=P}, pstate = PState}, Tag) ->
    State#state{
       sm = ldsm:export(SM, Tag),
-      pstate = P:export(PState, Tag)
+      pstate = P:export(PState)
    }.
 
 import(State=#state{sm=ExportedSM, conf=#conf{protocol=P}, pstate=ExportedPState}) ->
@@ -112,28 +114,29 @@ import(State=#state{sm=ExportedSM, conf=#conf{protocol=P}, pstate=ExportedPState
 
 % Initialize the state of a new replica
 
-init(Me, {new, PModule, SMModule, SMArgs}) ->
+init(Address, {new, PModule, SMModule, SMArgs}) ->
    #state{
-      me = Me,
+      me = Address,
       sm = ldsm:start(SMModule, SMArgs),
       conf = #conf{type = PModule:type(), protocol=PModule},
-      pstate = PModule:init_replica(Me)
+      pstate = PModule:init_replica(Address)
    };
-init(Me, {no_sm, PModule}) ->
+init(Address, {no_sm, PModule}) ->
    #state{
-      me = Me,
+      me = Address,
       conf = #conf{type = PModule:type(), protocol=PModule},
-      pstate = PModule:init_replica(Me)
+      pstate = PModule:init_replica(Address)
    }.
 
 
 % Handle a queued message
-handle_msg(Me, Message, State) ->
-   handle_msg(Me, Message, true, State).
+handle_msg(Address, Message, State) ->
+   handle_msg(Address, Message, true, State).
 
 
 % Handle a queued message
-handle_msg(Me, Message, ASE = _AllowSideEffects, State = #state{
+handle_msg(_Address, Message, ASE = _AllowSideEffects, State = #state{
+      me = Me,
       sm = SM,
       conf = Conf = #conf{type = ConfType, protocol = P, version = ConfVn},
       pstate = PState
@@ -174,7 +177,7 @@ handle_msg(Me, Message, ASE = _AllowSideEffects, State = #state{
                      do_nothing;
 
                   true ->
-                     {NewSMState, _} = replace_replica(
+                     NewSMState = replace_replica(
                         ldsm:get_state(SM), Conf, NewConf, true),
                      ldsm:set_state(SM, NewSMState)
                end,
@@ -216,14 +219,35 @@ handle_msg(Me, Message, ASE = _AllowSideEffects, State = #state{
                {stop, reconfigure}
          end;
 
-      % update the configuration by replacing OldReplica with NewReplica.
-      {Ref, Client, {replace, Me, NewConf}} ->
+      % update the configuration by replacing self with a new configuration
+      {Ref, Client, {replace, Me, NewConf=#conf{shard_agent = NewShardAgent}}}  ->
+         OldInnermostSM = get_innermost_sm(SM),
          % update configuration trees locally and notify others
-         ExportedState = State#state{sm = ldsm:export(SM)},
-         {_, NewRootConf} = replace_replica(ExportedState, Me, NewConf, true),
-         ldsm:stop(SM, {replaced, Me, NewConf}),
-         Client ! {Ref, NewRootConf},
-         {stop, replaced};
+         case NewShardAgent of
+            ?NoSA ->
+               replace_replica(Ref, Client, State, Me, NewConf, true),
+               ldsm:stop(OldInnermostSM, {replaced, Me, NewConf}),
+               {stop, replaced};
+
+            Me ->
+               NewState = replace_replica(Ref, Client,
+                  State#state{sm = replace_innermost_sm(SM,
+                        ldsm:start(shard_agent, NewConf))},
+                  Me, NewConf, true),
+
+               ldsm:stop(OldInnermostSM, {replaced, Me, NewConf}),
+               {consume, NewState};
+
+            _ ->
+               error({invalid_shard_agent_in_replacement_conf, Me, NewShardAgent})
+         end;
+
+      % update the configuration at a shard agent
+      {replace_shardagent, Me, NewConf, Ref, Client} ->
+         ShardAgent = get_innermost_sm(SM),
+         ldsm:set_state(ShardAgent, NewConf),
+         NewState = replace_replica(Ref, Client, State, Me, NewConf, true),
+         {consume, NewState};
 
       % update the configuration by replacing OldReplica with NewReplica
       {replace, OldReplica, NewReplica} ->
@@ -235,6 +259,7 @@ handle_msg(Me, Message, ASE = _AllowSideEffects, State = #state{
          },
          {consume, NewState};
 
+
       % Stop this replica
       {Ref, Client, {stop, Reason}} ->
          Client ! {Ref, ldsm:stop(SM, Reason)},
@@ -245,44 +270,44 @@ handle_msg(Me, Message, ASE = _AllowSideEffects, State = #state{
          Client ! {Ref, Conf},
          consume;
 
-      {Ref, Client, {inherit_sm, Pid, Coverage, Retry}} ->
-         PidSM = libdist_utils:call(Pid, {get_sm, Coverage}, Retry),
-         PidSMState = ldsm:get_state(PidSM),
-         {NewSMState, NewRootConf} = replace_replica(PidSMState, Pid, Conf, false),
+      {Ref, Client, {inherit_sm, Pid, Intent, Retry}} ->
+         PidSM = libdist_utils:call(Pid, {get_sm, Intent}, Retry),
+         NewSMState = replace_replica(ldsm:get_state(PidSM), Pid, Conf, false),
          NewSM = ldsm:import(ldsm:set_state(PidSM, NewSMState)),
-         Client ! {Ref, NewRootConf},
+         Client ! {Ref, ok},
          {consume, State#state{sm = NewSM}};
 
+
       % Return the state machine's module
-      {Ref, Client, get_sm_module} ->
-         case ConfType of
-            ?SINGLE -> Client ! {Ref, ldsm:module(SM)};  %do not nest singletons
-            _ -> Client ! {Ref, ?MODULE}
+      {Ref, Client, get_sm_module_and_conf_type} ->
+         Mod = case ConfType of
+            ?SINGLE -> ldsm:module(SM);      %do not nest singletons
+            _ -> ?MODULE
          end,
+         Client ! {Ref, {Mod, ConfType}},
          consume;
 
       % Added for debugging purposes only
-      {Ref, Client, get_sm} ->
-         handle_msg(Me, {Ref, Client, {get_sm, all}}, ASE, State);
+      {Ref, Client, get_state} ->
+         Client ! {Ref, ldsm:wrap(?MODULE, export(State))},
+         consume;
 
       % Return the state machine's state
       % TODO: change this into some sort of background state transfer
-      {Ref, Client, {get_sm, Coverage}} ->
-         case {ConfType, Coverage} of
-            % no need to nest protocols under singletons (performance)
-            {?SINGLE, all} ->
-               Client ! {Ref, ldsm:export(SM)};
-            {?SINGLE, {part, Tag}} ->
-               Client ! {Ref, ldsm:export(SM, Tag)};
-            {_, all} ->
-               Client ! {Ref, ldsm:wrap(?MODULE, export(State))};
-            {_, {part, Tag}} ->
-               Client ! {Ref, ldsm:wrap(?MODULE, export(State, Tag))}
+      {Ref, Client, {get_sm, replicate}} ->
+         case ConfType == ?SINGLE of
+            true -> Client ! {Ref, ldsm:export(SM)};
+            false -> Client ! {Ref, ldsm:wrap(?MODULE, export(State))}
          end,
          consume;
 
+      {Ref, Client, {get_sm, {partition, Tag}}} ->
+         Client ! {Ref, ldsm:export(get_innermost_sm(SM), Tag)},
+         consume;
+
+
       {Ref, Client, get_tags} ->
-         Client ! {Ref, get_tags(State#state{sm = ldsm:export(SM)}, [])},
+         Client ! {Ref, get_tags(State, [])},
          consume;
 
 
@@ -307,8 +332,30 @@ handle_msg(Me, Message, ASE = _AllowSideEffects, State = #state{
 %%%%%%%%%%%%%%%%%%%%%
 
 
-% TODO: XXX: This expects an exported state. FIXME!!
-replace_replica(State = #state{
+replace_replica(State, OldReplica, NewReplica, DoNotify) ->
+   replace_replica([], noreply, State, OldReplica, NewReplica, DoNotify).
+
+
+replace_replica(Ref, Client, State, OldReplica, NewReplica, DoNotify) ->
+   {NewState, Ret} = do_replace_replica(State, OldReplica, NewReplica, DoNotify),
+   case Ret of
+      noreply ->
+         do_nothing;
+
+      {replace_shardagent, ShardAgent, Conf, NewConf} ->
+         ?SEND(ShardAgent,
+            {replace_shardagent, Conf, NewConf, Ref, Client}, true);
+
+      NewRootConf when Client /= noreply ->
+         Client ! {Ref, NewRootConf};
+
+      _ ->
+         do_nothing
+   end,
+   NewState.   % return the modified state
+
+
+do_replace_replica(State = #state{
       me = Me,
       sm = SM,
       pstate = PState,
@@ -316,7 +363,8 @@ replace_replica(State = #state{
          type = ConfType,
          protocol = P,
          replicas = Replicas,
-         partitions = Partitions
+         partitions = Partitions,
+         shard_agent = ShardAgent
       }
    }, OldReplica, NewReplica, DoNotify) ->
    % if needed, notify siblings in RP Tree of configuration change. This should
@@ -338,31 +386,38 @@ replace_replica(State = #state{
 
          % modify the configuration with the new list of replicas or partitions
          NewConf = replace_conf_member(Conf, OldReplica, NewReplica),
-
-         % update higher levels of the RP-Tree if they exist
-         {NewSMState, NewRootConf} = replace_replica(
-            ldsm:get_state(SM), Conf, NewConf, DoNotify),
-
          % update protocol state and create new replica/partition state
          NewState = State#state{
             me = NewReplica,
-            sm = ldsm:set_state(SM, NewSMState),
             conf = NewConf,
             pstate = P:update_state(NewReplica, NewConf, PState)
          },
 
-         % return the new state and the new root configuration
-         {NewState, NewRootConf}
+
+         % update higher levels of the RP-Tree
+         case ShardAgent of
+            ?NoSA ->
+               {NewSMState, NewRootConf} = do_replace_replica(
+                  ldsm:get_state(SM), Conf, NewConf, DoNotify),
+
+               % update the nested state, and return the new state and root conf
+               {NewState#state{sm=ldsm:set_state(SM, NewSMState)}, NewRootConf};
+
+            _ when DoNotify ->
+               {NewState, {replace_shardagent, ShardAgent, Conf, NewConf}};
+
+            _ ->
+               {NewState, noreply}
+         end
    end;
 
 % in case State does not correspond to an R/P protocol
-replace_replica(State, _OldReplica, NewReplica, _DoNotify) -> 
+do_replace_replica(State, _OldReplica, NewReplica, _DoNotify) -> 
    {State, NewReplica}.
 
 
 
 % Recursively get the partitioning tags associated with current state machine
-% TODO: XXX: This expects an exported state. FIXME!!
 get_tags(#state{
       me = Me,
       sm = SM,
@@ -412,4 +467,22 @@ in_conf(Elem, #conf{type=ConfType, replicas=Replicas, partitions=Partitions}) ->
       ?REPL -> lists:member(Elem, Replicas);
       ?PART -> lists:keymember(Elem, 2, Partitions);
       ?SINGLE -> Replicas == [Elem]
+   end.
+
+
+
+replace_innermost_sm(OldSM, NewSM) ->
+   case ldsm:get_state(OldSM) of
+      #state{sm = NestedSM} = State ->
+         ldsm:set_state(OldSM,
+            State#state{sm = replace_innermost_sm(NestedSM, NewSM)});
+      _ ->
+         NewSM
+   end.
+
+
+get_innermost_sm(SM) ->
+   case ldsm:get_state(SM) of
+      #state{sm = NestedSM} -> get_innermost_sm(NestedSM);
+      _ -> SM
    end.

@@ -22,8 +22,7 @@
 % General utility
 -export([
       ipn/2,
-      list_replace/3,
-      is_next_cmd/2
+      list_replace/3
    ]).
 
 -include("constants.hrl").
@@ -58,27 +57,18 @@ list_replace(OldElem, NewElem, List) ->
    end.
 
 
-% checks whether the given tagged command number is what is expected for the tag
-is_next_cmd({Tags, Num}, CmdNums) ->
-   case dict:find(Tags, CmdNums) of
-      {ok, Num} ->            % expecting this number with these tags
-         {true, dict:store(Tags, Num+1, CmdNums)};
-      error ->                % first command from newly partitioned replica
-         {true, dict:store(Tags, Num+1, CmdNums)};
-      {ok, _} ->              % tags found, but incorrect command number
-         false
-   end.
-
 %%%%%%%%%%%%%%%%%%%%%%%
 % Async Communication %
 %%%%%%%%%%%%%%%%%%%%%%%
 
 
-
 % send a message directly to a process, or a configuration
 % Used for INTRA-protocol/domain communication
-send(Conf = #conf{protocol = P}, Message) ->
-   P:cast(Conf, Message);
+send(Conf = #conf{protocol = P, shard_agent = SA}, Message) ->
+   case SA of
+      ?NoSA -> P:cast(Conf, Message);
+      _ -> SA ! Message
+   end;
 send(Pid, Message) ->
    Pid ! Message.
 
@@ -89,7 +79,8 @@ cast(Dst, Request) ->
    Ref = make_ref(),
    Msg = {Ref, self(), Request},
    case Dst of
-      #conf{protocol = P} -> P:cast(Dst, Msg);
+      #conf{protocol = P, shard_agent = ?NoSA} -> P:cast(Dst, Msg);
+      #conf{shard_agent = SA} -> SA ! Msg;
       _ -> Dst ! Msg
    end,
    Ref.

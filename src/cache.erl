@@ -9,7 +9,6 @@
       init_replica/1,
       import/1,
       export/1,
-      export/2,
       update_state/3,
       handle_failure/5,
       handle_msg/5
@@ -63,10 +62,6 @@ import(_) ->
 
 % Export a cache replica state
 export(_) -> [].     % do not export anything
-
-% Export part of a cache replica's state
-export(State, _NewTag) ->
-   export(State).    % we are ignoring the tag here. This could be changed
 
 
 % Update the protocol's custom state (due to replacement or reconfiguration)
