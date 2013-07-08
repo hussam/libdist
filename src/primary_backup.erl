@@ -129,16 +129,15 @@ handle_msg(Me, Message, ASE = _AllowSideEffects, SM, State = #pb_state{
 
       % Handle command as a backup replica
       {NextCmdNum, Primary, Ref, Client, Cmd} ->
-         % adding command to unstable + num backups is useful in case of
+         % adding command to unstable is useful in case of
          % promotion to primary due to failure recovery
+         ldsm:do(SM, Cmd, false),
          ets:insert(Unstable, {NextCmdNum, NumBackups, Ref, Client, Cmd}),
          ?SEND(Primary, {ack, NextCmdNum}, ASE),
          {consume, State#pb_state{next_cmd_num = NextCmdNum + 1}};
 
       % Handle stabilizing a write command at a backup replica
       {stabilized, StableCount} ->
-         [{StableCount, _, _, _, Command}] = ets:lookup(Unstable, StableCount),
-         ldsm:do(SM, Command, false),
          ets:delete(Unstable, StableCount),
          {consume, State#pb_state{stable_count = StableCount + 1}};
 
