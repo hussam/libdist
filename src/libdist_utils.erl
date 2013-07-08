@@ -134,8 +134,10 @@ call(Pid, Request, Retry) when is_pid(Pid) ->
 
 % send parallel requests to all processes in a list and wait for one response
 anycall(Pids, Request, Retry) ->
-   multicall(Pids, Request, 1, Retry).
-
+   case multicall(Pids, Request, 1, Retry) of
+      {ok, [Resp]} -> {ok, Resp};
+      TimeoutResult -> TimeoutResult
+   end.
 
 % send parallel requests to all processes in a list and wait for all responses
 multicall(Pids, Request, Retry) ->
