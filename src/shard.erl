@@ -61,11 +61,6 @@ handle_msg(_Me, Message, ASE = _AllowSideEffects, SM, _State) ->
          ldsm:do(SM, Ref, Client, Command, ASE),
          consume;
 
-      {Ref, Client, {broadcast, Command}} ->
-         % This was part of a broadcast, do not allow side effects
-         ldsm:do(SM, Ref, Client, Command, false),
-         consume;
-
       _ ->
          no_match
    end.
