@@ -32,7 +32,7 @@ replicate(OldPid, Protocol, Args, Nodes) when is_pid(OldPid) ->
 
 do_replicate(OldPid, Protocol, Args, Nodes) ->
    % create a replicated state machine in place of the OldPid
-   {ok, Conf} = repobj:inherit( OldPid, {Protocol, Args}, Nodes, ?TO),
+   {ok, Conf} = repobj:inherit( OldPid, Protocol, Args, Nodes, ?TO),
    % replace the old process with the new configuration in the RP-Tree
    {Conf, libdist_utils:call(OldPid, {replace, OldPid, Conf}, ?TO)}.
 
@@ -45,7 +45,7 @@ do_partition(OldPid, Protocol, Args, RouteFn, SplitFn) ->
    % get the tags currently associated with the process
    OldTags = libdist_utils:call(OldPid, get_tags, ?TO),
    {ok, Conf} = repobj:inherit(
-         OldPid, {Protocol, {RouteFn, Args}}, SplitFn(OldTags), ?TO),
+         OldPid, Protocol, {RouteFn, Args}, SplitFn(OldTags), ?TO),
    % replace the old process with the new configuration in the RP-Tree
    {Conf, libdist_utils:call(OldPid, {replace, OldPid, Conf}, ?TO)}.
 
@@ -54,10 +54,10 @@ do_partition(OldPid, Protocol, Args, RouteFn, SplitFn) ->
 build({rptree, SMModule, SMArgs, Container}) ->
    case Container of
       Node when is_atom(Node) ->
-         {ok,Conf} = repobj:new({singleton,[]}, {SMModule, SMArgs}, [Node], ?TO),
+         {ok,Conf} = repobj:new(singleton, [], {SMModule, SMArgs}, [Node], ?TO),
          Conf;
       Spec ->
-         TopLevelSM = replica:new(singleton, {SMModule, SMArgs}, node()),
+         TopLevelSM = replica:new(singleton, [], {SMModule, SMArgs}, node()),
          build(TopLevelSM, Spec)
    end;
 

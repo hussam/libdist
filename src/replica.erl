@@ -7,7 +7,7 @@
 
 % Public interface
 -export([
-      new/3
+      new/4
    ]).
 
 % State machine interface
@@ -57,10 +57,10 @@ behaviour_info(_) ->
 
 
 % Start a new replica
-new({Protocol, ProtocolArgs}, {SMModule, SMArgs}, Node) ->
+new(Protocol, ProtocolArgs, {SMModule, SMArgs}, Node) ->
    server:start(Node, ?MODULE, {new, Protocol, ProtocolArgs, SMModule, SMArgs});
 % Start a new replica that will later inherit the state of an existing process
-new({Protocol, ProtocolArgs}, no_sm, Node) ->
+new(Protocol, ProtocolArgs, no_sm, Node) ->
    server:start(Node, ?MODULE, {no_sm, Protocol, ProtocolArgs}).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%

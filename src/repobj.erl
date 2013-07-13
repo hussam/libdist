@@ -2,8 +2,8 @@
 
 % Interface for manipulating a replicated object
 -export([
-      new/4,
-      inherit/4,
+      new/5,
+      inherit/5,
       cast/2,
       call/3,
       reconfigure/3
@@ -14,20 +14,20 @@
 
 
 % Create a new replicated state machine
-new(PSettings={_PModule, _PArgs}, SMSettings={SMModule, _} , Nodes, Timeout) ->
+new(PrtclMod, PrtclArgs, SMSettings={SMModule, _} , Nodes, Timeout) ->
    % spawn new replicas
-   Replicas = [ replica:new(PSettings, SMSettings, N) || N <- Nodes ],
+   Replicas = [ replica:new(PrtclMod, PrtclArgs, SMSettings, N) || N <- Nodes ],
    % configure replicas and return configuration
-   configure(PSettings, SMModule, Replicas, ?NoSA, Timeout).
+   configure(PrtclMod, PrtclArgs, SMModule, Replicas, ?NoSA, Timeout).
 
 
 % Create a new replicated state machine and prepare it to later inherit the
 % state of an existing process
-inherit(OldPid, PSettings = {PModule, _}, Nodes, Timeout) ->
+inherit(OldPid, PrtclMod, PrtclArgs, Nodes, Timeout) ->
    % spawn new processes
    Members = case PModule:type() of
-      ?REPL -> [ replica:new(PSettings, no_sm, N) || N <- Nodes ];
-      ?PART -> [ {T, replica:new(PSettings, no_sm, N)} || {T,N} <- Nodes ]
+      ?REPL -> [ replica:new(PrtclMod, PrtclArgs, no_sm, N) || N <- Nodes ];
+      ?PART -> [ {T, replica:new(PrtclMod, PrtclArgs, no_sm, N)} || {T,N} <- Nodes ]
    end,
    % get the old process's state machine module
    {SMModule, OldConfType} = libdist_utils:call(OldPid,
@@ -37,7 +37,7 @@ inherit(OldPid, PSettings = {PModule, _}, Nodes, Timeout) ->
       true -> OldPid;
       false -> ?NoSA
    end,
-   Conf = configure(PSettings, SMModule, Members, ShardAgent, Timeout),
+   Conf = configure(PrtclMod, PrtclArgs, SMModule, Members, ShardAgent, Timeout),
    % let the new processes inherit the appropriate portions of the state machine
    % of the old one. This also results in replacing OldPid in each process's
    % local RP-Tree with Conf
@@ -97,14 +97,14 @@ reconfigure(OldConf=#conf{type=T}, NewConf=#conf{type=T}, Timeout) ->
 %%%%%%%%%%%%%%%%%%%%%
 
 % Configure a set of processes for the first time
-configure(ProtocolSettings, SMModule, Members, ShardAgent, Timeout) ->
-   Conf = make_conf(ProtocolSettings, SMModule, Members, ShardAgent),
+configure(PrtclModule, PrtclArgs, SMModule, Members, ShardAgent, Timeout) ->
+   Conf = make_conf(PrtclModule, PrtclArgs, SMModule, Members, ShardAgent),
    Conf0 = Conf#conf{replicas = [], partitions = []},
    reconfigure(Conf0, Conf, Timeout).
 
 
 % Create a distributed system configuration
-make_conf({Protocol, ProtocolArgs}, SMModule, Members, ShardAgent) ->
+make_conf(Protocol, ProtocolArgs, SMModule, Members, ShardAgent) ->
    case Protocol:type() of
       ?SINGLE ->
          #conf{
