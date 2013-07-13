@@ -14,9 +14,9 @@
 
 
 % Create a new replicated state machine
-new(PSettings={PModule, _}, SMSettings={SMModule, _} , Nodes, Timeout) ->
+new(PSettings={_PModule, _PArgs}, SMSettings={SMModule, _} , Nodes, Timeout) ->
    % spawn new replicas
-   Replicas = [ replica:new(PModule, SMSettings, N) || N <- Nodes ],
+   Replicas = [ replica:new(PSettings, SMSettings, N) || N <- Nodes ],
    % configure replicas and return configuration
    configure(PSettings, SMModule, Replicas, ?NoSA, Timeout).
 
@@ -26,8 +26,8 @@ new(PSettings={PModule, _}, SMSettings={SMModule, _} , Nodes, Timeout) ->
 inherit(OldPid, PSettings = {PModule, _}, Nodes, Timeout) ->
    % spawn new processes
    Members = case PModule:type() of
-      ?REPL -> [ replica:new(PModule, no_sm, N) || N <- Nodes ];
-      ?PART -> [ {T, replica:new(PModule, no_sm, N)} || {T,N} <- Nodes ]
+      ?REPL -> [ replica:new(PSettings, no_sm, N) || N <- Nodes ];
+      ?PART -> [ {T, replica:new(PSettings, no_sm, N)} || {T,N} <- Nodes ]
    end,
    % get the old process's state machine module
    {SMModule, OldConfType} = libdist_utils:call(OldPid,

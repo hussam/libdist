@@ -45,7 +45,7 @@ behaviour_info(callbacks) ->
       {type, 0},
       {conf_args, 1},
       {cast, 2},
-      {init_replica, 1},
+      {init_replica, 2},
       {import, 1},
       {export, 1},
       {update_state, 3},
@@ -57,11 +57,11 @@ behaviour_info(_) ->
 
 
 % Start a new replica
-new(Protocol, {SMModule, SMArgs}, Node) ->
-   server:start(Node, ?MODULE, {new, Protocol, SMModule, SMArgs});
+new({Protocol, ProtocolArgs}, {SMModule, SMArgs}, Node) ->
+   server:start(Node, ?MODULE, {new, Protocol, ProtocolArgs, SMModule, SMArgs});
 % Start a new replica that will later inherit the state of an existing process
-new(Protocol, no_sm, Node) ->
-   server:start(Node, ?MODULE, {no_sm, Protocol}).
+new({Protocol, ProtocolArgs}, no_sm, Node) ->
+   server:start(Node, ?MODULE, {no_sm, Protocol, ProtocolArgs}).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%
 % State Machine Callbacks %
@@ -114,18 +114,18 @@ import(State=#state{sm=ExportedSM, conf=#conf{protocol=P}, pstate=ExportedPState
 
 % Initialize the state of a new replica
 
-init(Address, {new, PModule, SMModule, SMArgs}) ->
+init(Address, {new, PModule, PArgs, SMModule, SMArgs}) ->
    #state{
       me = Address,
       sm = ldsm:start(SMModule, SMArgs),
       conf = #conf{type = PModule:type(), protocol=PModule},
-      pstate = PModule:init_replica(Address)
+      pstate = PModule:init_replica(Address, PArgs)
    };
-init(Address, {no_sm, PModule}) ->
+init(Address, {no_sm, PModule, PArgs}) ->
    #state{
       me = Address,
       conf = #conf{type = PModule:type(), protocol=PModule},
-      pstate = PModule:init_replica(Address)
+      pstate = PModule:init_replica(Address, PArgs)
    }.
 
 

@@ -6,7 +6,7 @@
       type/0,
       conf_args/1,
       cast/2,
-      init_replica/1,
+      init_replica/2,
       import/1,
       export/1,
       update_state/3,
@@ -44,7 +44,8 @@
 %%%%%%%%%%%%%%%%%%%%%
 
 
-% This is a partitioning protocol and it does not require processing of extra arguments
+% This is a replication protocol and it does not require processing of extra
+% arguments
 type() -> ?REPL.
 conf_args(Args) -> Args.
 
@@ -63,7 +64,7 @@ cast(#conf{replicas=Reps=[Hd | _], sm_mod=SMMod, args=QArgs}, Command) ->
 
 
 % Initialize the state of a new replica
-init_replica(_Me) ->
+init_replica(_Me, _Args) ->
    #quorum_state{
       unstable = ets:new(unstable_commands, [{keypos, 2}])
    }.

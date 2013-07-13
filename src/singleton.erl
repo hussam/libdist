@@ -6,7 +6,7 @@
       type/0,
       conf_args/1,
       cast/2,
-      init_replica/1,
+      init_replica/2,
       import/1,
       export/1,
       update_state/3,
@@ -31,7 +31,7 @@ cast(#conf{replicas = [Pid]}, Command) ->
    libdist_utils:cast(Pid, {command, Command}).
 
 % There is no singleton-specific state, so all these functions are meaningless
-init_replica(_) -> [].
+init_replica(_,_) -> [].
 import(_) -> [].
 export(_) -> [].
 update_state(_,_,_) -> [].

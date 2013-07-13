@@ -6,7 +6,7 @@
       type/0,
       conf_args/1,
       cast/2,
-      init_replica/1,
+      init_replica/2,
       import/1,
       export/1,
       update_state/3,
@@ -35,7 +35,7 @@ cast(#conf{partitions = Ps, route_fn = F}, Command) ->
    libdist_utils:cast(Target, {command, Command}).
 
 % Initialize the state of a new shard
-init_replica(_Me) ->
+init_replica(_Me, _Args) ->
    [].
 
 % Import a previously exported shard state
