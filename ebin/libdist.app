@@ -15,7 +15,11 @@
          quorum,
          shard_agent,
          shard,
-         cache
+         cache,
+         elastic,
+         elastic_chain,
+         elastic_primary_backup,
+         elastic_band
          ]},
       {registered, []},
       {applications, [kernel, stdlib]}
