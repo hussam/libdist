@@ -4,6 +4,7 @@
 % replica callbacks
 -export([
       type/0,
+      overloads/1,
       conf_args/1,
       cast/2,
       init_replica/2,
@@ -27,6 +28,7 @@
 % This is a partitioning protocol and it does not make use of extra arguments
 type() -> ?PART.
 conf_args(Args) -> Args.
+overloads(_) -> false.
 
 
 % Send an asynchronous command to a sharded object

@@ -4,6 +4,7 @@
 % Replica callbacks
 -export([
       type/0,
+      overloads/1,
       conf_args/1,
       cast/2,
       init_replica/2,
@@ -45,9 +46,10 @@
 
 
 % This is a replication protocol and it does not require processing of extra
-% arguments
+% arguments and it does not overload any generic repobj functions
 type() -> ?REPL.
 conf_args(Args) -> Args.
+overloads(_) -> false.
 
 
 % Send an asynchronous command to a replicated object

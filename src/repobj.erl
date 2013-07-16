@@ -14,7 +14,13 @@
 
 
 % Create a new replicated state machine
-new(PrtclMod, PrtclArgs, SMSettings={SMModule, _} , Nodes, Timeout) ->
+new(PrtclMod, PrtclArgs, SMSettings, Nodes, Timeout) ->
+   case PrtclMod:overloads(new) of
+      true -> PrtclMod:new(PrtclArgs, SMSettings, Nodes, Timeout);
+      false -> do_new(PrtclMod, PrtclArgs, SMSettings, Nodes, Timeout)
+   end.
+
+do_new(PrtclMod, PrtclArgs, SMSettings={SMModule, _} , Nodes, Timeout) ->
    % spawn new processes
    Members = case PrtclMod:type() of
       ?REPL ->
@@ -71,7 +77,13 @@ call(Conf = #conf{protocol = P}, Command, Timeout) ->
 
 
 % Reconfigure the replicated object
-reconfigure(OldConf=#conf{type=T}, NewConf=#conf{type=T}, Timeout) ->
+reconfigure(OldConf=#conf{protocol=P}, NewConf, Timeout) ->
+   case P:overloads(reconfigure) of
+      true -> P:reconfigure(OldConf, NewConf, Timeout);
+      false -> do_reconfigure(OldConf, NewConf, Timeout)
+   end.
+
+do_reconfigure(OldConf=#conf{type=T}, NewConf=#conf{type=T}, Timeout) ->
    #conf{replicas=OldReps, partitions=OldParts, version=Vn} = OldConf,
    #conf{replicas=NewReps, partitions=NewParts} = NewConf,
    NextConf = NewConf#conf{version = Vn + 1},

@@ -5,6 +5,7 @@
 -export([
       type/0,
       conf_args/1,
+      overloads/1,
       cast/2,
       init_replica/2,
       import/1,
@@ -25,6 +26,7 @@
 
 type() -> ?SINGLE.
 conf_args(Args) -> Args.
+overloads(_) -> false.
 
 % Send an asynchronous command to a singleton configuration
 cast(#conf{replicas = [Pid]}, Command) ->

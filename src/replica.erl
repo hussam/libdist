@@ -44,6 +44,7 @@ behaviour_info(callbacks) ->
    [
       {type, 0},
       {conf_args, 1},
+      {overloads, 1},
       {cast, 2},
       {init_replica, 2},
       {import, 1},
