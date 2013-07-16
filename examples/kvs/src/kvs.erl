@@ -6,6 +6,7 @@
       put/3,
       get/2,
       split/1,
+      split/2,
       route/2
    ]).
 
