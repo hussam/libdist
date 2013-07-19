@@ -73,16 +73,19 @@ update_state(_Me, #conf{replicas = [Backend | Caches]}, State) ->
 
 
 % Handle the failure of a cache or a replica
-handle_failure(Me, NewConf, State=#cache_state{backend=Backend}, FailedPid, _Info) ->
+handle_failure(Me, Conf, State=#cache_state{backend=Backend}, FailedPid, _Info) ->
    case FailedPid of
       Backend ->
          % do not update the state. This will result in all write requests
          % timing out sent to the backend timing out, and caches can still
          % service read requests.
-         State;
+         {Conf, State};
 
       _ ->  % when a cache replica fails, just remove it.
-         update_state(Me, NewConf, State)
+         NewConf = Conf#conf{
+            replicas = lists:delete(FailedPid, Conf#conf.replicas)
+         },
+         {NewConf, update_state(Me, NewConf, State)}
    end.
 
 

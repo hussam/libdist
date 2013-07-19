@@ -103,9 +103,13 @@ update_state(Me, #conf{replicas = [Head | Tail]}, State) ->
    end.
 
 
+
 % Handle the failure of a replica
-handle_failure(Me, NewConf, State, _FailedPid, _Info) ->
-   update_state(Me, NewConf, State).
+handle_failure(Me, Conf = #conf{replicas = Pids}, State, FailedPid, _Info) ->
+   NewConf = Conf#conf{
+      replicas = lists:delete(FailedPid, Pids)
+   },
+   {NewConf, update_state(Me, NewConf, State)}.
 
 
 % Handle a queued message

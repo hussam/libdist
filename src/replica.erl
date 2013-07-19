@@ -1,6 +1,6 @@
 -module(replica).
 -behaviour(ldsm).
--compile({inline, [handle_msg/4]}).
+-compile({inline, [handle_msg/4, in_conf/2, get_peers/2]}).
 
 % This is a behaviour
 -export([behaviour_info/1]).
@@ -143,50 +143,35 @@ handle_msg(_Address, Message, ASE = _AllowSideEffects, State = #state{
       pstate = PState
    }) ->
    case Message of
+      {'DOWN', _MonitorRef, process, _FailedPid, {replaced, _, #conf{}}} ->
+         % ignore failure notifications due to processes being replaced in the
+         % RP-Tree
+         consume;
+
       {'DOWN', _MonitorRef, process, FailedPid, Info} ->
-         case in_conf(FailedPid, Conf) of
-            false ->
-               consume;    % ignore
+         case { in_conf(FailedPid, Conf) , ldsm:is_rp_protocol(SM) } of
+            {false, true} ->  % Failed process is an uncle in the RP-Tree
+               ldsm:do(SM, Message, ASE),
+               consume;
 
-            true ->
-               % compute new configuration and the failed unit
-               {FailedUnit, NewConf} = case ConfType of
-                  ?SINGLE ->
-                     error(should_not_be_handling_failure_on_singleton);
-
-                  ?REPL ->
-                     Replicas = Conf#conf.replicas,
-                     {FailedPid, Conf#conf{
-                           replicas = lists:delete(FailedPid, Replicas),
-                           version = ConfVn + 1
-                        }};
-
-                  ?PART ->
-                     Partitions = Conf#conf.partitions,
-                     FailedPartition = {_,_} = lists:keyfind(FailedPid, 2, Partitions),
-                     {FailedPartition, Conf#conf{
-                           partitions = lists:keydelete(FailedPid, 2, Partitions),
-                           version = ConfVn + 1
-                        }}
-               end,
-
+            _ ->     % Failed process is a peer of the current replica
                % let the protocol update its state to respond to the failure
-               NewPState = P:handle_failure(Me, NewConf, PState, FailedUnit, Info),
-
-               case ldsm:is_rp_protocol(SM) of
-                  false ->
-                     do_nothing;
-
-                  true ->
-                     NewSMState = replace_replica(
-                        ldsm:get_state(SM), Conf, NewConf, true),
-                     ldsm:set_state(SM, NewSMState)
+               {NewConf, NewPState} = P:handle_failure(
+                                          Me, Conf, PState, FailedPid, Info),
+               % update the local state and configuration accordingly
+               NextConf = case NewConf /= Conf of
+                  true -> NewConf#conf{version = ConfVn + 1};
+                  false -> Conf
                end,
-
-               NewState = State#state{
-                  conf = NewConf,
-                  pstate = NewPState
-               },
+               NewState = State#state{conf = NextConf, pstate = NewPState},
+               % propagate changes up the rp-tree (nested protocols) if needed
+               case ldsm:is_rp_protocol(SM) of
+                  true when NextConf /= Conf ->
+                     ldsm:set_state(SM, replace_replica(
+                           ldsm:get_state(SM), Conf, NextConf, true) );
+                  _ ->
+                     do_nothing
+               end,
                {consume, NewState}
          end;
 
@@ -194,29 +179,25 @@ handle_msg(_Address, Message, ASE = _AllowSideEffects, State = #state{
       % TODO: handle reconfiguration in nested protocols
       {Ref, Client, {reconfigure, NewConf}} ->
          Client ! {Ref, ok},
-         #conf{replicas = NewReplicas, partitions = NewPartitions} = NewConf,
-         InNextConf = (
-            ((ConfType == ?SINGLE) and (NewReplicas == [Me])) or
-            ((ConfType == ?REPL) and lists:member(Me, NewReplicas)) or
-            ((ConfType == ?PART) and lists:keymember(Me, 2, NewPartitions))
-         ),
-         case InNextConf of
+         case in_conf(Me, NewConf) of
             true ->
-               Others = case ConfType of
-                  ?SINGLE -> [];
-                  ?REPL -> lists:delete(Me, NewReplicas);
-                  ?PART -> lists:delete(Me, [Pid || {_, Pid} <- NewPartitions])
-               end,
-
                % monitor peers in new configuration if they are processes
-               [ monitor(process, Peer) || Peer <- Others, is_pid(Peer) ],
+               [monitor(process, Peer) || Peer <- get_peers(Me, NewConf), is_pid(Peer)],
+
+               case ldsm:is_rp_protocol(SM) of
+                  true ->
+                     ldsm:set_state(SM, replace_replica(
+                           ldsm:get_state(SM), Conf, NewConf, true));
+                  false ->
+                     do_nothing
+               end,
 
                {consume, State#state{
                      conf = NewConf,
                      pstate = P:update_state(Me, NewConf, PState)
                   }};
             false ->
-               ldsm:stop(SM,reconfigure),
+               ldsm:stop(SM, reconfigure),
                {stop, reconfigure}
          end;
 
@@ -228,7 +209,7 @@ handle_msg(_Address, Message, ASE = _AllowSideEffects, State = #state{
             ?NoSA ->
                replace_replica(Ref, Client, State, Me, NewConf, true),
                ldsm:stop(OldInnermostSM, {replaced, Me, NewConf}),
-               {stop, replaced};
+               {stop, {replaced, Me, NewConf}};
 
             Me ->
                NewState = replace_replica(Ref, Client,
@@ -274,6 +255,7 @@ handle_msg(_Address, Message, ASE = _AllowSideEffects, State = #state{
       {Ref, Client, {inherit_sm, Pid, Intent, Retry}} ->
          PidSM = libdist_utils:call(Pid, {get_sm, Intent}, Retry),
          NewSMState = replace_replica(ldsm:get_state(PidSM), Pid, Conf, false),
+         monitor_nested_siblings(NewSMState),
          NewSM = ldsm:import(ldsm:set_state(PidSM, NewSMState)),
          Client ! {Ref, ok},
          {consume, State#state{sm = NewSM}};
@@ -333,9 +315,16 @@ handle_msg(_Address, Message, ASE = _AllowSideEffects, State = #state{
 %%%%%%%%%%%%%%%%%%%%%
 
 
+% Set up monitoring for peers of nested replicas on this process
+monitor_nested_siblings(#state{me = Me, sm = SM, conf = Conf}) ->
+   [ monitor(process, P) || P <- get_peers(Me, Conf), is_pid(P) ],
+   monitor_nested_siblings(ldsm:get_state(SM));
+monitor_nested_siblings(_) -> [].
+
+
+% Locally replace OldReplica with NewReplica and potentially notify peers
 replace_replica(State, OldReplica, NewReplica, DoNotify) ->
    replace_replica([], noreply, State, OldReplica, NewReplica, DoNotify).
-
 
 replace_replica(Ref, Client, State, OldReplica, NewReplica, DoNotify) ->
    {NewState, Ret} = do_replace_replica(State, OldReplica, NewReplica, DoNotify),
@@ -361,10 +350,7 @@ do_replace_replica(State = #state{
       sm = SM,
       pstate = PState,
       conf = Conf = #conf{
-         type = ConfType,
          protocol = P,
-         replicas = Replicas,
-         partitions = Partitions,
          shard_agent = ShardAgent
       }
    }, OldReplica, NewReplica, DoNotify) ->
@@ -375,17 +361,11 @@ do_replace_replica(State = #state{
          error(replace_replica_should_not_get_here);
       true ->
          % trigger replacement/reconfiguration on other replicas/partitions
-         Others = case ConfType of
-            ?SINGLE ->
-               [];
-            ?REPL ->
-               lists:delete(OldReplica, Replicas);
-            ?PART ->
-               [Partition || {_,Partition} <- lists:keydelete(Me, 2, Partitions)]
-         end,
+         Others = get_peers(Me, Conf),
          [ ?SEND(X, {replace, Me, NewReplica}, DoNotify) || X <- Others ],
 
          % modify the configuration with the new list of replicas or partitions
+
          NewConf = replace_conf_member(Conf, OldReplica, NewReplica),
          % update protocol state and create new replica/partition state
          NewState = State#state{
@@ -443,33 +423,42 @@ get_tags(#state{
 replace_conf_member(OldConf = #conf{
       type = ConfType, version=Vn, replicas = Replicas, partitions = Partitions
    }, OldMember, NewMember) ->
-   case ConfType of
-      ?REPL ->
-         OldConf#conf{
-            version = Vn + 1,
-            replicas = libdist_utils:list_replace(OldMember, NewMember, Replicas)
-         };
-
-      ?PART ->
-         {Tag, _} = lists:keyfind(OldMember, 2, Partitions),
-         OldConf#conf{
-            version = Vn+1,
-            partitions = lists:keyreplace(
-               OldMember, 2, Partitions, {Tag, NewMember})
-         };
-      ?SINGLE ->
-         NewMember
+   case in_conf(OldMember, OldConf) of
+      false ->
+         OldConf;
+      true ->
+         case ConfType of
+            ?PART ->
+               {Tag, _} = lists:keyfind(OldMember, 2, Partitions),
+               OldConf#conf{
+                  version = Vn+1,
+                  partitions = lists:keyreplace(
+                     OldMember, 2, Partitions, {Tag, NewMember})
+               };
+            _ ->
+               OldConf#conf{
+                  version = Vn + 1,
+                  replicas = libdist_utils:list_replace(
+                     OldMember, NewMember, Replicas)
+               }
+         end
    end.
 
 
 % Test whether a process or PSM is a member of a given configuration
 in_conf(Elem, #conf{type=ConfType, replicas=Replicas, partitions=Partitions}) ->
    case ConfType of
-      ?REPL -> lists:member(Elem, Replicas);
       ?PART -> lists:keymember(Elem, 2, Partitions);
-      ?SINGLE -> Replicas == [Elem]
+      _ -> lists:member(Elem, Replicas)
    end.
 
+
+% Return the peers of a process or PSM in the given configuration
+get_peers(Me, #conf{type=ConfType, replicas=Replicas, partitions=Partitions}) ->
+   case ConfType of
+      ?PART -> lists:delete(Me, [ P || {_Tag, P} <- Partitions ]);
+      _ ->     lists:delete(Me, Replicas)
+   end.
 
 
 replace_innermost_sm(OldSM, NewSM) ->

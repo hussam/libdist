@@ -153,11 +153,9 @@ update_state(Me, NewConf=#conf{version=Vn}, State=#elastic_state{protocol=P}) ->
 
 
 % Handle the failure of a replica
-handle_failure(_Me, _NewConf, State, _FailedPid, _Info) ->
-   State#elastic_state{
-      mode = immutable
-   }.    % TODO FIXME!!
-
+handle_failure(Me, Conf=#conf{version = Vn}, State, FailedPid, Info) ->
+   ?SEND(Me, {Vn, {request_reconfig, Conf, FailedPid, Info}}, true),
+   {Conf, State#elastic_state{mode = immutable}}.
 
 
 % Handle a queued message
@@ -250,6 +248,18 @@ handle_msg(Me, Message, ASE = _AllowSideEffects, SM, State = #elastic_state{
             NextCmdNum
          },
          ?SEND(Replica, {Ref, CurrState}, ASE),
+         consume;
+
+      % Request reconfiguration if in an Elastic Band
+      {Vn, {request_reconfig, Config, FailedPid, FailureInfo}} ->
+         % FIXME XXX: This signals reconfiguration request regardless of nested
+         % protocol. Should I check to make sure it is an Elastic Band?
+         case ldsm:is_rp_protocol(SM) of
+            true ->
+               ldsm:do(SM, {reconfig_needed, Config, FailedPid, FailureInfo}, true);
+            _ ->
+               do_nothing
+         end,
          consume;
 
       % for other tagged  messages, return a 'wedged' message

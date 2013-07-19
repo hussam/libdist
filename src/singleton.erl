@@ -37,7 +37,7 @@ init_replica(_,_) -> [].
 import(_) -> [].
 export(_) -> [].
 update_state(_,_,_) -> [].
-handle_failure(_, _, _, _, _) -> [].
+handle_failure(_Me, Conf, State, _FailedPid, _Info) -> {Conf, State}.
 
 % Handle a queued message
 handle_msg(_Me, Message, ASE = _AllowSideEffects, SM, _State) ->

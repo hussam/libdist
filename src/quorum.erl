@@ -108,11 +108,11 @@ update_state(Me, #conf{replicas = NewReps, args = QArgs}, State) ->
 
 
 % Handle failure of a replica
-handle_failure(_Me, _NewConf, State, _FailedPid, _Info) ->
+handle_failure(_Me, Conf, State, _FailedPid, _Info) ->
    % Do not modify the state since this protocol masks failure.
    % However, coordinator will still send messages to failed replicas according
    % to its old state.
-   State.
+   {Conf, State}.
 
 
 % Handle a queued message

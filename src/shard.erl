@@ -53,8 +53,8 @@ update_state(_Me, _NewConf, _State) ->
    [].
 
 % Handle the failure of a shard
-handle_failure(_Me, _NewConf, State, {_FailedTag, _FailedPid}, _Info) ->
-   State.   % FIXME: implement this properly!
+handle_failure(_Me, Conf, State, _FailedPid, _Info) ->
+   {Conf, State}.   % FIXME: implement this properly!
 
 % Handle a queued message
 handle_msg(_Me, Message, ASE = _AllowSideEffects, SM, _State) ->

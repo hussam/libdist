@@ -59,16 +59,16 @@ export(State) ->
 
 % Update the protocol's custom state (due to replacement or reconfiguration)
 update_state(Me, NewConf = #conf{partitions = Shards}, OldState) ->
-   TaggedMe = lists:keyfind(Me, 2, Shards),
-   {_, Prev, Next} = libdist_utils:ipn(TaggedMe, Shards),
+   Peers = [ P || {_Tag, P} <- Shards ],
+   {_, Prev, Next} = libdist_utils:ipn(Me, Peers),
    OldState#elastic_band_state{
-      predecessor = case Prev of chain_head -> lists:last(Shards); X -> X end,
-      successor = case Next of chain_tail -> hd(Shards); X -> X end
+      predecessor = case Prev of chain_head -> lists:last(Peers); X -> X end,
+      successor = case Next of chain_tail -> hd(Peers); X -> X end
    }.
 
 % Handle the failure of a shard
-handle_failure(_Me, _NewConf, State, {_FailedTag, _FailedPid}, _Info) ->
-   State.   % FIXME: implement this properly!
+handle_failure(_Me, Conf, State, _FailedPid, _Info) ->
+   {Conf, State}.   % FIXME: implement this properly!
 
 % Handle a queued message
 handle_msg(Me, Message, ASE = _AllowSideEffects, SM, State=#elastic_band_state{
@@ -81,8 +81,8 @@ handle_msg(Me, Message, ASE = _AllowSideEffects, SM, State=#elastic_band_state{
          ldsm:do(SM, Ref, Client, Command, ASE),
          consume;
 
-      {reconfig_needed, FailureSuspect} ->
-         ?SEND(Sequencer, {reconfig_request, Me, FailureSuspect}, true),
+      {reconfig_needed, Me, FailedPid, _FailureInfo} ->
+         ?SEND(Sequencer, {reconfig_request, Me, FailedPid}, true),
          consume;
 
       {reconfig_request, Successor=#conf{version=OldVn, replicas=OldPids},
