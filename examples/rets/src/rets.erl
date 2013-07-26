@@ -33,13 +33,13 @@
 
 
 ping(Conf, PingType, Key) ->
-   repobj:call(Conf, Key, {PingType, Key}, ?TIMEOUT).
+   repobj:call(Conf, {PingType, Key}, ?TIMEOUT).
 
 read(Conf, Key) ->
-   repobj:call(Conf, Key, {read, Key}, ?TIMEOUT).
+   repobj:call(Conf, {read, Key}, ?TIMEOUT).
 
 write(Conf, Key, Value) ->
-   repobj:call(Conf, Key, {write, Key, Value}, ?TIMEOUT).
+   repobj:call(Conf, {write, Key, Value}, ?TIMEOUT).
 
 
 % Select the partition that can handle the given command
