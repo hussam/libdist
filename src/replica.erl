@@ -119,13 +119,13 @@ init(Address, {new, PModule, PArgs, SMModule, SMArgs}) ->
    #state{
       me = Address,
       sm = ldsm:start(SMModule, SMArgs),
-      conf = #conf{type = PModule:type(), protocol=PModule},
+      conf = #conf{type = PModule:type(), protocol=PModule, replicas=[Address]},
       pstate = PModule:init_replica(Address, PArgs)
    };
 init(Address, {no_sm, PModule, PArgs}) ->
    #state{
       me = Address,
-      conf = #conf{type = PModule:type(), protocol=PModule},
+      conf = #conf{type = PModule:type(), protocol=PModule, replicas=[Address]},
       pstate = PModule:init_replica(Address, PArgs)
    }.
 
@@ -365,8 +365,8 @@ do_replace_replica(State = #state{
          [ ?SEND(X, {replace, Me, NewReplica}, DoNotify) || X <- Others ],
 
          % modify the configuration with the new list of replicas or partitions
-
          NewConf = replace_conf_member(Conf, OldReplica, NewReplica),
+
          % update protocol state and create new replica/partition state
          NewState = State#state{
             me = NewReplica,
@@ -435,12 +435,14 @@ replace_conf_member(OldConf = #conf{
                   partitions = lists:keyreplace(
                      OldMember, 2, Partitions, {Tag, NewMember})
                };
-            _ ->
+            ?REPL ->
                OldConf#conf{
                   version = Vn + 1,
                   replicas = libdist_utils:list_replace(
                      OldMember, NewMember, Replicas)
-               }
+               };
+            ?SINGLE ->
+               NewMember
          end
    end.
 
