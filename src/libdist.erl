@@ -16,7 +16,7 @@
 
 % Create a new standalone server process
 new_proc(SMModule, SMArgs, Node) ->
-   replica:new(singleton, {SMModule, SMArgs}, Node).
+   replica:new(singleton, [], {SMModule, SMArgs}, Node).
 
 
 % the process Pid has nested state machines for all R/P nodes from Pid to the
