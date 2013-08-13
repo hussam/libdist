@@ -23,10 +23,10 @@ new(PrtclMod, PrtclArgs, SMSettings, Nodes, Timeout) ->
 do_new(PrtclMod, PrtclArgs, SMSettings={SMModule, _} , Nodes, Timeout) ->
    % spawn new processes
    Members = case PrtclMod:type() of
-      ?REPL ->
-         [ replica:new(PrtclMod, PrtclArgs, SMSettings, N) || N <- Nodes ];
       ?PART ->
-         [ {T, replica:new(PrtclMod, PrtclArgs, SMSettings, N)} || {T,N} <- Nodes ]
+         [ {T, replica:new(PrtclMod, PrtclArgs, SMSettings, N)} || {T,N} <- Nodes ];
+      _ ->
+         [ replica:new(PrtclMod, PrtclArgs, SMSettings, N) || N <- Nodes ]
    end,
    % configure replicas and return configuration
    configure(PrtclMod, PrtclArgs, SMModule, Members, ?NoSA, Timeout).
