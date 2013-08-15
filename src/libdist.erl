@@ -28,6 +28,7 @@ new_proc(SMModule, SMArgs, Node) ->
 
 replicate(OldPid, Protocol, Args, Nodes) when is_pid(OldPid) ->
    {_, RootConf} = do_replicate(OldPid, Protocol, Args, Nodes),
+   conf_tracker:track(RootConf),
    RootConf.
 
 do_replicate(OldPid, Protocol, Args, Nodes) ->
@@ -39,6 +40,7 @@ do_replicate(OldPid, Protocol, Args, Nodes) ->
 
 partition(OldPid, Protocol, Args, RouteFn, SplitFn) when is_pid(OldPid) ->
    {_, RootConf} = do_partition(OldPid, Protocol, Args, RouteFn, SplitFn),
+   conf_tracker:track(RootConf),
    RootConf.
 
 do_partition(OldPid, Protocol, Args, RouteFn, SplitFn) ->
@@ -52,14 +54,16 @@ do_partition(OldPid, Protocol, Args, RouteFn, SplitFn) ->
 
 % Build an RP-Tree using top-level specification
 build({rptree, SMModule, SMArgs, Container}) ->
-   case Container of
+   RootConf = case Container of
       Node when is_atom(Node) ->
          {ok,Conf} = repobj:new(singleton, [], {SMModule, SMArgs}, [Node], ?TO),
          Conf;
       Spec ->
          TopLevelSM = replica:new(singleton, [], {SMModule, SMArgs}, node()),
          build(TopLevelSM, Spec)
-   end;
+   end,
+   conf_tracker:track(RootConf),
+   RootConf;
 
 % Build an RP-Tree as specified in Filename
 build(Filename) ->

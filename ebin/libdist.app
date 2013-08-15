@@ -19,7 +19,9 @@
          elastic,
          elastic_chain,
          elastic_primary_backup,
-         elastic_band
+         elastic_band,
+         conf_tracker,
+         libdist_client
          ]},
       {registered, []},
       {applications, [kernel, stdlib]}

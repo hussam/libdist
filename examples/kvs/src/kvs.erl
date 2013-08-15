@@ -1,8 +1,9 @@
 -module(kvs).
 -behaviour(ldsm).
 
-% Echo Public API
+% KVS Public API
 -export([
+      connect_client/1,
       put/3,
       get/2,
       split/1,
@@ -25,16 +26,21 @@
 -define(TIMEOUT, 5000).
 
 
+% Connect a client to a node of the distributed KVS
+connect_client(Node) ->
+   libdist_client:connect(Node, ?TIMEOUT).
+
+
 % Bind a value to a key
-put(Conf, Key, Value) ->
-   case repobj:call(Conf, {put, Key, Value}, ?TIMEOUT) of
+put(ClientId, Key, Value) ->
+   case libdist_client:call(ClientId, {put, Key, Value}) of
       {ok, Result} -> Result;
       Error -> Error
    end.
 
 % Get the value bound to a key
-get(Conf, Key) ->
-   case repobj:call(Conf, {get, Key}, ?TIMEOUT) of
+get(ClientId, Key) ->
+   case libdist_client:call(ClientId, {get, Key}) of
       {ok, Result} -> Result;
       Error -> Error
    end.
