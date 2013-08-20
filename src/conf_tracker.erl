@@ -4,6 +4,7 @@
       track/2,
       get_conf/1,
       update_conf/2,
+      get_tracker/1,
 
       ping/2,
       client_connect/2
@@ -58,6 +59,11 @@ get_conf(Tracker) ->
    receive
       {Ref, Conf} -> Conf
    end.
+
+
+% Get the address of the tracker running on the given node
+get_tracker(Node) ->
+   {?TRACKER, Node}.
 
 
 % Start a configuration tracker on the local node.
