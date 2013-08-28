@@ -13,6 +13,7 @@
 
 % Sync comm
 -export([
+      cast_and_collect/3,
       call/3,
       anycall/3,
       multicall/3,
@@ -125,6 +126,11 @@ collectall({Ref, Pids}, Timeout) ->
 %%%%%%%%%%%%%%%%%%%%%%
 % Sync Communication %
 %%%%%%%%%%%%%%%%%%%%%%
+
+
+% Cast a request and attempt to collect it. Works like call but only tries once
+cast_and_collect(Dst, Request, Timeout) ->
+   collect(cast(Dst, Request), Timeout).
 
 
 % send synchronous request to a process
