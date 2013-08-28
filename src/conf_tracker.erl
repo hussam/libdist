@@ -45,20 +45,12 @@ track(Node, Conf) ->
 
 % Update the configuration at the tracker
 update_conf(Tracker, NewConf) ->
-   Ref = make_ref(),
-   Tracker ! {Ref, self(), update_conf, NewConf},
-   receive
-      {Ref, ok} -> ok
-   end.
+   libdist_utils:call(Tracker, {update_conf, NewConf}, infinity).
 
 
 % Get the configuration at the tracker
 get_conf(Tracker) ->
-   Ref = make_ref(),
-   Tracker ! {Ref, self(), get_conf},
-   receive
-      {Ref, Conf} -> Conf
-   end.
+   libdist_utils:call(Tracker, get_conf, infinity).
 
 
 % Get the address of the tracker running on the given node
@@ -81,25 +73,15 @@ run_local_tracker(GossipInterval) ->
 
 % Ping the tracker on the given node
 ping(TrackerNode, Timeout) ->
-   Ref = make_ref(),
    Tracker = {?TRACKER, TrackerNode},
-   Tracker ! {Ref, self(), ping},
-   receive
-      {Ref, pong} -> {ok, Tracker}
-   after
-      Timeout ->
-         {error, timeout}
+   case libdist_utils:cast_and_collect(Tracker, ping, Timeout) of
+      {ok, pong} -> {ok, Tracker};
+      Error -> Error
    end.
 
 % Connects a client to a tracker
 client_connect(Tracker, Timeout) ->
-   Ref = make_ref(),
-   Tracker ! {Ref, self(), client_connect},
-   receive
-      {Ref, Conf} -> {ok, Conf}
-   after
-      Timeout -> {error, timeout}
-   end.
+   libdist_utils:cast_and_collect(Tracker, client_connect, Timeout).
 
 
 %%%%%%%%%%%%%%%%%%%%%
@@ -122,7 +104,7 @@ loop(Conf = #conf{version = Vn}, RegClients, PeerNodes, NumPeers) ->
          Client ! {Ref, Conf},
          loop(Conf, RegClients, PeerNodes, NumPeers);
 
-      {Ref, Client, update_conf, NewConf=#conf{version = Vn2}} when Vn2 > Vn ->
+      {Ref, Client, {update_conf, NewConf=#conf{version=Vn2}}} when Vn2 > Vn ->
          Client ! {Ref, ok},
          NewPeerNodes = lists:delete(node(),
             ordsets:to_list(get_conf_nodes(NewConf))),
