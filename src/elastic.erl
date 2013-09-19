@@ -195,6 +195,7 @@ handle_msg(Me, Message, ASE = _AllowSideEffects, SM, State = #elastic_state{
             next_cmd_num = NextCmdNum
          },
          % update the configuration maintained by the replica
+         % XXX: this is ugly. FIXME to something with better boundaries/API
          ?SEND(Me, {{Ref, Client}, Me, {reconfigure, NewConf}}, ASE),
          {consume, NewState};
 
