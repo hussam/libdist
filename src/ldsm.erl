@@ -21,7 +21,8 @@
       import/1,
       wrap/2,
       get_state/1,
-      set_state/2
+      set_state/2,
+      reconfigure/2
    ]).
 
 -include("helper_macros.hrl").
@@ -50,11 +51,21 @@ start(Module, Args) ->
 is_mutating({_, Module}, Command) ->
    Module:is_mutating(Command).
 
-do(SM, Command, AllowSideEffects) ->
-   call(SM, do, Command, AllowSideEffects).
+do(SM = {Server, _}, Command, AllowSideEffects) ->
+   Result = call(SM, do, Command, AllowSideEffects),
+   case AllowSideEffects of
+      true -> node_monitor:op_done(Server);
+      _ -> do_nothing
+   end,
+   Result.
 
-do(SM, Ref, Client, Command, AllowSideEffects) ->
-   call(SM, do, Ref, Client, Command, AllowSideEffects).
+do(SM = {Server, _}, Ref, Client, Command, AllowSideEffects) ->
+   Result = call(SM, do, Ref, Client, Command, AllowSideEffects),
+   case AllowSideEffects of
+      true -> node_monitor:op_done(Server);
+      _ -> do_nothing
+   end,
+   Result.
 
 stop(SM, Reason) ->
    call(SM, stop, Reason).
@@ -91,6 +102,8 @@ is_rp_protocol({exported_sm, replica, _}) -> true;   % for exported state
 is_rp_protocol(_) -> false.
 
 
+reconfigure({Server, _}, NewConf) ->
+   node_monitor:register_sm(Server, NewConf).
 
 %%%%%%%%%%%%%%%%%%%%%
 % Private Functions %

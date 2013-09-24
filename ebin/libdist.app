@@ -21,7 +21,10 @@
          elastic_primary_backup,
          elastic_band,
          conf_tracker,
-         libdist_client
+         libdist_client,
+         node_monitor,
+         cluster_manager,
+         libdist_app
          ]},
       {registered, []},
       {applications, [kernel, stdlib]}

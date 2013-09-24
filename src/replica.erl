@@ -1,6 +1,6 @@
 -module(replica).
 -behaviour(ldsm).
--compile({inline, [handle_msg/4, in_conf/2, get_peers/2]}).
+-compile({inline, [handle_msg/4, in_conf/2, get_peers/2, reconf_sm/3]}).
 
 % This is a behaviour
 -export([behaviour_info/1]).
@@ -164,14 +164,7 @@ handle_msg(_Address, Message, ASE = _AllowSideEffects, State = #state{
                   false -> Conf
                end,
                NewState = State#state{conf = NextConf, pstate = NewPState},
-               % propagate changes up the rp-tree (nested protocols) if needed
-               case ldsm:is_rp_protocol(SM) of
-                  true when NextConf /= Conf ->
-                     ldsm:set_state(SM, replace_replica(
-                           ldsm:get_state(SM), Conf, NextConf, true) );
-                  _ ->
-                     do_nothing
-               end,
+               reconf_sm(SM, Conf, NextConf),
                {consume, NewState}
          end;
 
@@ -184,13 +177,7 @@ handle_msg(_Address, Message, ASE = _AllowSideEffects, State = #state{
                % monitor peers in new configuration if they are processes
                [monitor(process, Peer) || Peer <- get_peers(Me, NewConf), is_pid(Peer)],
 
-               case ldsm:is_rp_protocol(SM) of
-                  true ->
-                     ldsm:set_state(SM, replace_replica(
-                           ldsm:get_state(SM), Conf, NewConf, true));
-                  false ->
-                     do_nothing
-               end,
+               reconf_sm(SM, Conf, NewConf),
 
                {consume, State#state{
                      conf = NewConf,
@@ -257,6 +244,7 @@ handle_msg(_Address, Message, ASE = _AllowSideEffects, State = #state{
          NewSMState = replace_replica(ldsm:get_state(PidSM), Pid, Conf, false),
          monitor_nested_siblings(NewSMState),
          NewSM = ldsm:import(ldsm:set_state(PidSM, NewSMState)),
+         ldsm:reconfigure(NewSM, Conf),
          Client ! {Ref, ok},
          {consume, State#state{sm = NewSM}};
 
@@ -478,3 +466,19 @@ get_innermost_sm(SM) ->
       #state{sm = NestedSM} -> get_innermost_sm(NestedSM);
       _ -> SM
    end.
+
+reconf_sm(SM, OldConf, NewConf) ->
+   % propagate changes up the rp-tree (nested protocols) if needed
+   case ldsm:is_rp_protocol(SM) of
+      true when NewConf /= OldConf ->
+         ldsm:set_state(SM, replace_replica(
+               ldsm:get_state(SM), OldConf, NewConf, true) );
+      _ ->
+         do_nothing
+   end,
+   case SM of
+      undefined -> do_nothing;
+      _ -> ldsm:reconfigure(SM, NewConf)
+   end,
+   SM.
+

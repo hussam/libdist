@@ -14,3 +14,10 @@
 
 % XXX: for some reason I could not set shard_agent to ?NoSA and just include
 % "constants.hrl" without the compiler giving me errors. FIXME!
+
+% Service Level Agreement
+-record(sla, {
+      reliability,
+      throughput,
+      latency
+   }).

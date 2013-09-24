@@ -134,7 +134,7 @@ cast_and_collect(Dst, Request, Timeout) ->
 
 
 % send synchronous request to a process
-call(Pid, Request, Retry) when is_pid(Pid) ->
+call(Pid, Request, Retry) ->
    call(Pid, make_ref(), Request, Retry).
 
 
