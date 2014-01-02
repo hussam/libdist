@@ -3,6 +3,7 @@
 % Async comm
 -export([
       send/2,
+      send_after/3,
       cast/2,
       collect/2,
       multicast/2,
@@ -72,6 +73,17 @@ send(Conf = #conf{protocol = P, shard_agent = SA}, Message) ->
    end;
 send(Pid, Message) ->
    Pid ! Message.
+
+
+% just like send/2 but the message is sent after Time milliseconds
+send_after(Time, Conf = #conf{protocol = P, shard_agent = SA}, Message) ->
+   case SA of
+      % XXX: is the use of timer:apply_after/3 bad for performance?
+      ?NoSA -> timer:apply_after(Time, P, cast, [Conf, Message]);
+      _ -> erlang:send_after(Time, SA, Message)
+   end;
+send_after(Time, Pid, Message) ->
+   erlang:send_after(Time, Pid, Message).
 
 % transform a request into a message and send an asynchronously to the given
 % destination returns the request's reference
