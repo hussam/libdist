@@ -99,15 +99,15 @@ cast(Dst, Request) ->
    Ref.
 
 
-% send an asynchronous request to all the processes of a list
+% send an asynchronous request to all the destinations of a list
 % returns the request's reference
-multicast(Pids, Request) ->
+multicast(Dsts, Request) ->
    Parent = self(),
    Ref = make_ref(),
-   % Each request is tagged with {Ref, Pid} so that when collecting we know
-   % exactly which Pids timed out
-   [spawn(fun() -> Pid ! {{Ref, Pid}, Parent, Request} end) || Pid <- Pids],
-   {Ref, Pids}.
+   % Each request is tagged with {Ref, D} so that when collecting we know
+   % exactly which destinations timed out
+   [ libdist_utils:send(D, {{Ref, D}, Parent, Request})  || D <- Dsts ],
+   {Ref, Dsts}.
 
 
 % wait for a response for a previously cast request until timeout occurs
@@ -120,18 +120,18 @@ collect(Ref, Timeout) ->
 
 
 % wait for a single response from a multicast request
-collectany({Ref, Pids}, Timeout) ->
-   collectMany(Ref, Pids, [], 1, Timeout).
+collectany({Ref, Dsts}, Timeout) ->
+   collectMany(Ref, Dsts, [], 1, Timeout).
 
 
 % wait for some responses from a multicast request
-collectmany({Ref, Pids}, NumResponses, Timeout) ->
-   collectMany(Ref, Pids, [], NumResponses, Timeout).
+collectmany({Ref, Dsts}, NumResponses, Timeout) ->
+   collectMany(Ref, Dsts, [], NumResponses, Timeout).
 
 
 % wait for all responses from a multicast request
-collectall({Ref, Pids}, Timeout) ->
-   collectMany(Ref, Pids, [], length(Pids), Timeout).
+collectall({Ref, Dsts}, Timeout) ->
+   collectMany(Ref, Dsts, [], length(Dsts), Timeout).
 
 
 
