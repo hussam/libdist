@@ -4,6 +4,7 @@
 
 -export([
       start/0,
+      get_nodes/0,
       add_nodes/1,
       set_sla/1,
       deploy/3
@@ -16,7 +17,7 @@
 -define(REEVAL_INTERVAL, 10000). % re-evaluate architecture/p-tree every 10 secs
 
 -record(state, {
-      nodes = [],
+      nodes = ordsets:new(),
       conf_tree,
       reqs_tree = [],
       confs_tp,
@@ -36,6 +37,9 @@ start() ->
 
 add_nodes(Nodes) ->
    libdist_utils:call(?CLUSTER_MAN, {add_nodes, Nodes}, infinity).
+
+get_nodes() ->
+   libdist_utils:call(?CLUSTER_MAN, get_nodes, infinity).
 
 set_sla(SLA) ->
    libdist_utils:call(?CLUSTER_MAN, {set_sla, SLA}, infinity).
@@ -87,11 +91,16 @@ loop(State = #state{
          ets:insert(ConfsTP, {NewConf, 0}),
          loop(State);
 
+      {Ref, Client, get_nodes} ->
+         Client ! {Ref, Nodes},
+         loop(State);
+
       {Ref, Client, {add_nodes, NewNodes}} ->
          Client ! {Ref, ok},
+         ActualNewNodes = ordsets:subtract(ordsets:from_list(NewNodes), Nodes),
          [ spawn(N, node_monitor, start, [{?CLUSTER_MAN, node()}]) || N <-
-            NewNodes ],
-         loop(State#state{nodes = Nodes ++ NewNodes});
+            ActualNewNodes ],
+         loop(State#state{nodes = ordsets:union(Nodes, ActualNewNodes)});
 
       {Ref, Client, {set_sla, NewSLA}} ->
          Client ! {Ref, ok},
