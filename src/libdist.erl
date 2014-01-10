@@ -54,6 +54,8 @@ do_partition(OldPid, Protocol, Args, RouteFn, SplitFn) ->
 
 % Build an RP-Tree using top-level specification
 build({rptree, SMModule, SMArgs, Container}) ->
+   cluster_manager:start(),
+   cluster_manager:add_nodes( get_container_nodes(Container) ),
    RootConf = case Container of
       Node when is_atom(Node) ->
          {ok,Conf} = repobj:new(singleton, [], {SMModule, SMArgs}, [Node], ?TO),
@@ -105,3 +107,16 @@ build(ParentPid, {psm, Protocol, Args, _RouteFn={Mod, Fn}, TaggedContainers}) ->
       TmpRootConf,
       lists:zip(TaggedContainers, Conf#conf.partitions)
    ).
+
+
+get_container_nodes(Container) ->
+   case Container of
+      Node when is_atom(Node) ->
+         [Node];
+
+      {rsm, _Protocol, _Args, Containers} ->
+         lists:flatten([ get_container_nodes(C) || C <- Containers ]);
+
+      {psm, _Protocol, _Args, _RouteFn, TaggedContainers} ->
+         lists:flatten([ get_container_nodes(C) || {_T, C} <- TaggedContainers])
+   end.
