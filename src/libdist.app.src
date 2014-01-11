@@ -1,0 +1,8 @@
+{application, libdist,
+   [
+      {description, "A library to build distributed systems"},
+      {vsn, "0.2"},
+      {registered, []},
+      {applications, [kernel, stdlib]}
+   ]
+}.
