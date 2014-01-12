@@ -19,7 +19,7 @@
 -include("helper_macros.hrl").
 -include("libdist.hrl").
 
-% State specific to a chain replica
+% State specific to a cache replica
 -record(cache_state, {
       local_store,
       backend,
@@ -40,7 +40,7 @@ conf_args(Args) -> Args.
 overloads(_) -> false.
 
 
-% Send an asynchronous command to a chain replicated object
+% Send an asynchronous command to a cache replicated object
 cast(#conf{replicas = [Head | Tail], sm_mod = SMModule}, Command) ->
    {Tag, Target} = case SMModule:is_mutating(Command) of
       true -> {write, Head};
