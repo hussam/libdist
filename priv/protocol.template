@@ -1,0 +1,2 @@
+{variables, [{modid, "myprotocol"}]}.
+{template, "protocol.erl", "src/{{modid}}.erl"}.
