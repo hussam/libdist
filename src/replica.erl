@@ -258,11 +258,6 @@ handle_msg(_Address, Message, ASE = _AllowSideEffects, State = #state{
          Client ! {Ref, {Mod, ConfType}},
          consume;
 
-      % Added for debugging purposes only
-      {Ref, Client, get_state} ->
-         Client ! {Ref, ldsm:wrap(?MODULE, export(State))},
-         consume;
-
       % Return the state machine's state
       % TODO: change this into some sort of background state transfer
       {Ref, Client, {get_sm, replicate}} ->
@@ -276,9 +271,14 @@ handle_msg(_Address, Message, ASE = _AllowSideEffects, State = #state{
          Client ! {Ref, ldsm:export(get_innermost_sm(SM), Tag)},
          consume;
 
-
       {Ref, Client, get_tags} ->
          Client ! {Ref, get_tags(State, [])},
+         consume;
+
+
+      % Added for debugging purposes only
+      {Ref, Client, {dbg, get_state}} ->
+         Client ! {Ref, ldsm:wrap(?MODULE, export(State))},
          consume;
 
 
