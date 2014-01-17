@@ -239,8 +239,8 @@ handle_msg(_Address, Message, ASE = _AllowSideEffects, State = #state{
          Client ! {Ref, Conf},
          consume;
 
-      {Ref, Client, {inherit_sm, Pid, Intent, Retry}} ->
-         PidSM = libdist_utils:call(Pid, {get_sm, Intent}, Retry),
+      {Ref, Client, {inherit_sm, Pid, Intent, _Retry}} ->
+         {ok, PidSM} = state_transfer:request_blocking(Pid, {get_sm, Intent}),
          NewSMState = replace_replica(ldsm:get_state(PidSM), Pid, Conf, false),
          monitor_nested_siblings(NewSMState),
          NewSM = ldsm:import(ldsm:set_state(PidSM, NewSMState)),
@@ -259,16 +259,18 @@ handle_msg(_Address, Message, ASE = _AllowSideEffects, State = #state{
          consume;
 
       % Return the state machine's state
-      % TODO: change this into some sort of background state transfer
-      {Ref, Client, {get_sm, replicate}} ->
-         case ConfType == ?SINGLE of
-            true -> Client ! {Ref, ldsm:export(SM)};
-            false -> Client ! {Ref, ldsm:wrap(?MODULE, export(State))}
+      {{get_sm, Intent}, STInfo} ->
+         TransferState = case Intent of
+            replicate when ConfType == ?SINGLE -> ldsm:export(SM);
+            replicate -> ldsm:wrap(?MODULE, export(State));
+            {partition, Tag} -> ldsm:export(get_innermost_sm(SM), Tag)
          end,
-         consume;
-
-      {Ref, Client, {get_sm, {partition, Tag}}} ->
-         Client ! {Ref, ldsm:export(get_innermost_sm(SM), Tag)},
+         state_transfer:serve_nonblocking(
+            STInfo,
+            TransferState,
+            ?MTU,
+            fun(_)-> ok end      % Dummy callback. TODO handle potential errors
+         ),
          consume;
 
       {Ref, Client, get_tags} ->
