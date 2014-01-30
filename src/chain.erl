@@ -103,8 +103,8 @@ handle_msg(_Me, Message, ASE = _AllowSideEffects, SM, State = #chain_state{
       % Handle command as the HEAD of the chain
       {Ref, Client, {write, Command}} when Prev == chain_head ->
          FwdMsg = {NextCmdNum, Ref, Client, Command},
-         ets:insert(Unstable, FwdMsg),
          ?SEND(Next, FwdMsg, ASE),
+         ets:insert(Unstable, FwdMsg),
          {consume, State#chain_state{next_cmd_num = NextCmdNum+ 1}};
 
       % Handle command as any replica in the MIDDLE of the chain
