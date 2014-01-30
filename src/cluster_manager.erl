@@ -96,10 +96,10 @@ loop(State = #state{
          loop(State);
 
       {Ref, Client, {add_nodes, NewNodes}} ->
-         Client ! {Ref, ok},
          ActualNewNodes = ordsets:subtract(ordsets:from_list(NewNodes), Nodes),
          [ spawn(N, node_monitor, start, [{?CLUSTER_MAN, node()}]) || N <-
             ActualNewNodes ],
+         Client ! {Ref, ok},
          loop(State#state{nodes = ordsets:union(Nodes, ActualNewNodes)});
 
       {Ref, Client, {set_sla, NewSLA}} ->
