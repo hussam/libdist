@@ -1,5 +1,6 @@
 -module(node_monitor).
 -export([
+      start_noreporting/0,
       start/1,
       op_done/1,
       register_sm/2
@@ -11,6 +12,8 @@
 -define(MONITOR, libdist_node_monitor).
 -define(REPORT_INTERVAL, 1000).     % 1 second report interval
 
+
+start_noreporting() -> start(nil).
 
 start(ClusterManager) ->
    Pid = spawn(fun() -> loop(ClusterManager) end),
@@ -35,7 +38,10 @@ register_sm(LDSMServer, Conf) ->
 
 loop(ClusterManager) ->
    OpCounters = ets:new(op_counts, []),
-   timer:send_interval(?REPORT_INTERVAL, report),
+   case ClusterManager of
+      nil -> do_nothing;
+      _ -> timer:send_interval(?REPORT_INTERVAL, report)
+   end,
    loop(ClusterManager, OpCounters).
 
 loop(ClusterManager, OpCounters) ->
@@ -45,8 +51,12 @@ loop(ClusterManager, OpCounters) ->
          loop(ClusterManager, OpCounters);
 
       {Ref, Client, {register_sm, SMServer, Conf}} ->
-         ets:insert(OpCounters, {SMServer, 0, Conf}),
-         libdist_utils:send(ClusterManager, {register_conf, Conf}),
+         case ClusterManager of
+            nil -> do_nothing;
+            _ ->
+               ets:insert(OpCounters, {SMServer, 0, Conf}),
+               libdist_utils:send(ClusterManager, {register_conf, Conf})
+         end,
          Client ! {Ref, ok},
          loop(ClusterManager, OpCounters);
 

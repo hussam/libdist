@@ -28,7 +28,10 @@
 start() ->
    Pid = spawn(fun() -> loop() end),
    try register(?CLUSTER_MAN, Pid) of
-      true -> ok
+      true ->
+         % a local node monitor is needed for temp replicas started while
+         % building a spec.
+         node_monitor:start_noreporting()
    catch
       error:badarg ->   % already registered
          exit(Pid, already_started),
