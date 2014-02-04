@@ -54,8 +54,13 @@ do_partition(OldPid, Protocol, Args, RouteFn, SplitFn) ->
 
 % Build an RP-Tree using top-level specification
 build({rptree, SMModule, SMArgs, Container}) ->
-   cluster_manager:start(),
-   cluster_manager:add_nodes( get_container_nodes(Container) ),
+   % If the cluster manager was already running, we'll assume that the nodes
+   % mentioned in the spec were added to it. Otherwise, we'll start a cluster
+   % manager and add the container nodes to it.
+   case cluster_manager:start() of
+      already_started -> do_nothing;
+      _ -> cluster_manager:add_nodes( get_container_nodes(Container) )
+   end,
    RootConf = case Container of
       Node when is_atom(Node) ->
          {ok,Conf} = repobj:new(singleton, [], {SMModule, SMArgs}, [Node], ?TO),
