@@ -1,27 +1,31 @@
 -module(cluster_manager).
 
--compile({inline, [store/3]}).
-
 -export([
       start/0,
       get_nodes/0,
       add_nodes/1,
-      set_sla/1,
+      set_slo/1,
       deploy/3
    ]).
 
 
 -include("libdist.hrl").
+-include("constants.hrl").
 
 -define(CLUSTER_MAN, libdist_cluster_manager).
--define(REEVAL_INTERVAL, 10000). % re-evaluate architecture/p-tree every 10 secs
+-define(REEVAL_INTERVAL, 1000). % re-evaluate architecture/p-tree every 10 secs
 
 -record(state, {
       nodes = ordsets:new(),
-      conf_tree,
-      reqs_tree = [],
-      confs_tp,
-      sla
+      slo_tree,
+      flattened_slo_tree = [],
+      confs_tp
+   }).
+
+-record(node, {
+      conf,
+      slo,
+      children = []
    }).
 
 
@@ -44,11 +48,11 @@ add_nodes(Nodes) ->
 get_nodes() ->
    libdist_utils:call(?CLUSTER_MAN, get_nodes, infinity).
 
-set_sla(SLA) ->
-   libdist_utils:call(?CLUSTER_MAN, {set_sla, SLA}, infinity).
+set_slo(SLO) ->
+   libdist_utils:call(?CLUSTER_MAN, {set_slo, SLO}, infinity).
 
-deploy(Module, Args, SLA) ->
-   libdist_utils:call(?CLUSTER_MAN, {deploy, Module, Args, SLA}, infinity).
+deploy(Module, Args, SLO) ->
+   libdist_utils:call(?CLUSTER_MAN, {deploy, Module, Args, SLO}, infinity).
 
 %%%%%%%%%%%%%%%%%%%%%
 % Private Functions %
@@ -57,16 +61,16 @@ deploy(Module, Args, SLA) ->
 loop() ->
    timer:send_interval(?REEVAL_INTERVAL, reevaluate),
    State = #state{
-      confs_tp = ets:new(confs_tp, [])
+      confs_tp = ets:new(confs_tp, []),
+      slo_tree = #node{}
    },
    loop(State).
 
 loop(State = #state{
-      nodes     = Nodes,
-      conf_tree = _ConfTree,
-      reqs_tree = ReqsTree,
-      confs_tp  = ConfsTP,
-      sla       = _SLA
+      nodes    = Nodes,
+      slo_tree = SLOTree = #node{conf = TopLevelConf},
+      flattened_slo_tree = FlatSLOTree,
+      confs_tp = ConfsTP
    }) ->
    receive
       {tp_report, TPReport} ->
@@ -78,6 +82,11 @@ loop(State = #state{
             fun({Conf, #sla{throughput = ReqTP}}) ->
                   case ets:lookup(ConfsTP, Conf) of
                      [{_, ActualTP}] when ActualTP < ReqTP ->
+                        if ActualTP /= 0 ->
+                           io:format("ActualTP = ~p ReqTP = ~p\n", [ActualTP,
+                                 ReqTP]);
+                           true -> do_nothing
+                        end,
                         % TODO: implement some action
                         todo;    % XXX: LEFT HERE!
                      _ ->
@@ -86,7 +95,7 @@ loop(State = #state{
                   % reset TP counts
                   ets:insert(ConfsTP, {Conf, 0})
             end,
-            ReqsTree
+            FlatSLOTree
          ),
          loop(State);
 
@@ -98,6 +107,14 @@ loop(State = #state{
          Client ! {Ref, Nodes},
          loop(State);
 
+      {Ref, Client, get_conf} ->
+         Client ! {Ref, TopLevelConf},
+         loop(State);
+
+      {Ref, Client, get_slo} ->
+         Client ! {Ref, SLOTree#node.slo},
+         loop(State);
+
       {Ref, Client, {add_nodes, NewNodes}} ->
          ActualNewNodes = ordsets:subtract(ordsets:from_list(NewNodes), Nodes),
          [ spawn(N, node_monitor, start, [{?CLUSTER_MAN, node()}]) || N <-
@@ -105,16 +122,22 @@ loop(State = #state{
          Client ! {Ref, ok},
          loop(State#state{nodes = ordsets:union(Nodes, ActualNewNodes)});
 
-      {Ref, Client, {set_sla, NewSLA}} ->
+      {Ref, Client, {set_slo, NewSLO}} ->
+         NewSLOTree = build_slo_tree(TopLevelConf, NewSLO),
+         NewFlattened = flatten(NewSLOTree),
          Client ! {Ref, ok},
-         loop(State#state{sla = NewSLA});
+         loop(State#state{
+               slo_tree = NewSLOTree,
+               flattened_slo_tree = NewFlattened
+            });
 
-      {Ref, Client, {deploy, Module, Args, NewSLA}} ->
-         NewConfTree = libdist:build({rptree, Module, Args, hd(Nodes)}),
+      {Ref, Client, {deploy, Module, Args, NewSLO}} ->
+         ConfTree = libdist:build({rptree, Module, Args, hd(Nodes)}),
+         NewSLOTree = build_slo_tree(ConfTree, NewSLO),
+         NewFlattened = flatten(NewSLOTree),
          NewState = State#state{
-            conf_tree = NewConfTree,
-            reqs_tree = store(NewConfTree, NewSLA, ReqsTree),
-            sla = NewSLA
+            slo_tree = NewSLOTree,
+            flattened_slo_tree = NewFlattened
          },
          Client ! {Ref, ok},
          loop(NewState);
@@ -130,5 +153,24 @@ loop(State = #state{
 %%%%%%%%%%%%%%%%%%%%%
 
 
-store(Key, Value, KeyList) ->
-   lists:keystore(Key, 1, KeyList, {Key, Value}).
+build_slo_tree(Conf, SLO) ->
+   ConfMembers = case Conf#conf.type of
+      ?SINGLE -> [];
+      ?REPL -> Conf#conf.replicas;
+      ?PART -> [ S || {_Tag, S} <- Conf#conf.partitions ]
+   end,
+   % XXX TODO: divide SLO changes down the tree
+   Children = lists:map( fun
+         (C = #conf{}) ->
+            #node{conf = C, slo = SLO, children = build_slo_tree(C, SLO)};
+         (P) when is_pid(P) ->
+            #node{conf = P, slo = SLO, children = []}
+      end,
+      ConfMembers
+   ),
+   #node{conf = Conf, slo = SLO, children = Children}.
+
+
+flatten(#node{conf = Conf, slo = SLO, children = Children}) ->
+   lists:flatten([ {Conf, SLO} | [flatten(Child) || Child <- Children] ]).
+
