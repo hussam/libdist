@@ -79,7 +79,7 @@ loop(State = #state{
 
       reevaluate ->
          lists:foreach(
-            fun({Conf, #sla{throughput = ReqTP}}) ->
+            fun({Conf, #slo{throughput = ReqTP}}) ->
                   case ets:lookup(ConfsTP, Conf) of
                      [{_, ActualTP}] when ActualTP < ReqTP ->
                         if ActualTP /= 0 ->

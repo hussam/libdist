@@ -12,5 +12,5 @@ start(ManagerNode, ClusterNodes) ->
    cluster_manager:add_nodes(ClusterNodes).
 
 deploy(Module, Args, Throughput) ->
-   SLA = #sla{ throughput = Throughput },
+   SLA = #slo{ throughput = Throughput },
    cluster_manager:deploy(Module, Args, SLA).

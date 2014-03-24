@@ -16,7 +16,7 @@
 % "constants.hrl" without the compiler giving me errors. FIXME!
 
 % Service Level Agreement
--record(sla, {
+-record(slo, {
       reliability,
       throughput,
       latency
