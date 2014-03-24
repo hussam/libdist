@@ -1,6 +1,6 @@
 -module(replica).
 -behaviour(ldsm).
--compile({inline, [handle_msg/4, in_conf/2, get_peers/2, reconf_sm/3]}).
+-compile({inline, [handle_msg/4, reconf_sm/3]}).
 
 % This is a behaviour
 -export([behaviour_info/1]).
@@ -149,7 +149,7 @@ handle_msg(_Address, Message, ASE = _AllowSideEffects, State = #state{
          consume;
 
       {'DOWN', _MonitorRef, process, FailedPid, Info} ->
-         case { in_conf(FailedPid, Conf) , ldsm:is_rp_protocol(SM) } of
+         case {conf_utils:member(FailedPid, Conf) , ldsm:is_rp_protocol(SM)} of
             {false, true} ->  % Failed process is an uncle in the RP-Tree
                ldsm:do(SM, Message, ASE),
                consume;
@@ -172,10 +172,11 @@ handle_msg(_Address, Message, ASE = _AllowSideEffects, State = #state{
       % TODO: handle reconfiguration in nested protocols
       {Ref, Client, {reconfigure, NewConf}} ->
          Client ! {Ref, ok},
-         case in_conf(Me, NewConf) of
+         case conf_utils:member(Me, NewConf) of
             true ->
                % monitor peers in new configuration if they are processes
-               [monitor(process, Peer) || Peer <- get_peers(Me, NewConf), is_pid(Peer)],
+               [monitor(process, Peer)
+                  || Peer <- conf_utils:peers(Me, NewConf), is_pid(Peer)],
 
                reconf_sm(SM, Conf, NewConf),
 
@@ -307,7 +308,7 @@ handle_msg(_Address, Message, ASE = _AllowSideEffects, State = #state{
 
 % Set up monitoring for peers of nested replicas on this process
 monitor_nested_siblings(#state{me = Me, sm = SM, conf = Conf}) ->
-   [ monitor(process, P) || P <- get_peers(Me, Conf), is_pid(P) ],
+   [ monitor(process, P) || P <- conf_utils:peers(Me, Conf), is_pid(P) ],
    monitor_nested_siblings(ldsm:get_state(SM));
 monitor_nested_siblings(_) -> [].
 
@@ -351,7 +352,7 @@ do_replace_replica(State = #state{
          error(replace_replica_should_not_get_here);
       true ->
          % trigger replacement/reconfiguration on other replicas/partitions
-         Others = get_peers(Me, Conf),
+         Others = conf_utils:peers(Me, Conf),
          [ ?SEND(X, {replace, Me, NewReplica}, DoNotify) || X <- Others ],
 
          % modify the configuration with the new list of replicas or partitions
@@ -413,7 +414,7 @@ get_tags(#state{
 replace_conf_member(OldConf = #conf{
       type = ConfType, version=Vn, replicas = Replicas, partitions = Partitions
    }, OldMember, NewMember) ->
-   case in_conf(OldMember, OldConf) of
+   case conf_utils:member(OldMember, OldConf) of
       false ->
          OldConf;
       true ->
@@ -436,21 +437,6 @@ replace_conf_member(OldConf = #conf{
          end
    end.
 
-
-% Test whether a process or PSM is a member of a given configuration
-in_conf(Elem, #conf{type=ConfType, replicas=Replicas, partitions=Partitions}) ->
-   case ConfType of
-      ?PART -> lists:keymember(Elem, 2, Partitions);
-      _ -> lists:member(Elem, Replicas)
-   end.
-
-
-% Return the peers of a process or PSM in the given configuration
-get_peers(Me, #conf{type=ConfType, replicas=Replicas, partitions=Partitions}) ->
-   case ConfType of
-      ?PART -> lists:delete(Me, [ P || {_Tag, P} <- Partitions ]);
-      _ ->     lists:delete(Me, Replicas)
-   end.
 
 
 replace_innermost_sm(OldSM, NewSM) ->
