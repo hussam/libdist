@@ -154,11 +154,6 @@ loop(State = #state{
 
 
 build_slo_tree(Conf, SLO) ->
-   ConfMembers = case Conf#conf.type of
-      ?SINGLE -> [];
-      ?REPL -> Conf#conf.replicas;
-      ?PART -> [ S || {_Tag, S} <- Conf#conf.partitions ]
-   end,
    % XXX TODO: divide SLO changes down the tree
    Children = lists:map( fun
          (C = #conf{}) ->
@@ -166,7 +161,7 @@ build_slo_tree(Conf, SLO) ->
          (P) when is_pid(P) ->
             #node{conf = P, slo = SLO, children = []}
       end,
-      ConfMembers
+      conf_utils:members(Conf)
    ),
    #node{conf = Conf, slo = SLO, children = Children}.
 
